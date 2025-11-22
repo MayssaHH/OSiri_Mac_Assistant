@@ -1,4 +1,9 @@
+agent-framework 
+mcp 
+anyio
+pydantic
 a2a-sdk
 uvicorn
 httpx
-anyio
+python-dotenv
+azure-identity
