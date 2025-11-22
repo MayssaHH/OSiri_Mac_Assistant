@@ -39,7 +39,7 @@ MEDIUM_PATTERNS = [
 ]
 
 DENY_PATTERNS = [
-    re.compile(r"\brm\s+-rf\s+/\b"),
+    re.compile(r"\brm\s+-rf\s+/"),
     re.compile(r"\bsudo\b"),
     re.compile(r"\bshutdown\b"),
     re.compile(r"\breboot\b"),
@@ -112,7 +112,7 @@ class SessionManager:
         self.sessions.pop(session_id, None)
         return True
 
-    def run_command(self, session_id: str, command: str, timeout_s: float = 20.0) -> Dict:
+    def run_command(self, session_id: str, command: str, timeout_s: float = 20.0, approved: bool = False) -> Dict:
         s = self.sessions.get(session_id)
         if not s:
             return {"ok": False, "error": f"Unknown session_id: {session_id}"}
@@ -225,12 +225,12 @@ def open_shell(cwd: str | None = None) -> dict:
     return {"session_id": sid}
 
 @mcp.tool()
-def run_command(session_id: str, command: str, timeout_s: float = 20.0) -> dict:
+def run_command(session_id: str, command: str, timeout_s: float = 20.0, approved: bool = False) -> dict:
     """
     Run a command inside a given shell session.
     Returns {ok, output, exit_code} or {ok, error}.
     """
-    return manager.run_command(session_id, command, timeout_s=timeout_s)
+    return manager.run_command(session_id, command, timeout_s=timeout_s, approved=approved)
 
 @mcp.tool()
 def close_shell(session_id: str) -> dict:
