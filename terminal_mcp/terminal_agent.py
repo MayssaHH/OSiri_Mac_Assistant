@@ -3,10 +3,10 @@ import json
 import logging
 from datetime import datetime
 from typing import Callable, Awaitable
-from terminal_client import open_shell, run_command, close_shell, list_shells, get_cwd, terminal_mcp
+from .terminal_client import open_shell, run_command, close_shell, list_shells, get_cwd, terminal_mcp
 from agent_framework import AgentRunContext, FunctionInvocationContext # type: ignore
 from agent_framework.openai import OpenAIChatClient   # type: ignore
-from prompt import get_system_prompt, get_planner_prompt, get_execution_prompt
+from .prompt import get_system_prompt, get_planner_prompt, get_execution_prompt
 from dotenv import load_dotenv
 
 load_dotenv()

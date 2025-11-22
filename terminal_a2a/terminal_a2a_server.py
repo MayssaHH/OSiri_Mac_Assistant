@@ -1,4 +1,3 @@
-# terminal_a2a_server.py
 import os
 import uvicorn
 
