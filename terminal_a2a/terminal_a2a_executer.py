@@ -117,7 +117,11 @@ class TerminalAgentExecutor(AgentExecutor):
             # Always reset so approval doesn't leak to later tasks
             set_approved_mode(False)
 
-        exec_report = {"text": exec_res.text}
+        exec_text = exec_res.text.strip()
+        try:
+            exec_report = json.loads(exec_text)
+        except Exception:
+            exec_report = {"text": exec_text}
         logger.info(f"[A2A] exec_report={exec_report}")
 
         # 5) Return final response
