@@ -1,1 +1,4 @@
 .venv/
+.env
+__pycache__/
+terminal-mcp/__pycache__/
