@@ -77,9 +77,23 @@ class SessionManager:
         if denied:
             return {"ok": False, "error": f"Command blocked by safety policy (pattern: {denied})"}
 
-        token = f"__MCP_DONE_{uuid.uuid4().hex}__"
-        payload = f"{command}\necho {token} $?\n"
+        risk = classify_risk(command)
+        if risk != "safe" and not approved:
+            return {
+                "ok": False,
+                "error": f"Command requires approval (risk={risk})",
+                "risk": risk
+            }
 
+        done_token = f"__MCP_DONE_{uuid.uuid4().hex}__"
+        cwd_token  = f"__MCP_CWD_{uuid.uuid4().hex}__"
+
+        payload = (
+            f"{command}\n"
+            f"echo {done_token} $?\n"
+            f"pwd\n"
+            f"echo {cwd_token}\n"
+        )
         # Send command
         try:
             s.proc.stdin.write(payload)
@@ -87,11 +101,15 @@ class SessionManager:
         except Exception as e:
             return {"ok": False, "error": f"Failed to write to shell: {e}"}
 
-        output_lines = []
+        cmd_out_lines = []
+        cwd_lines = []
         start = time.time()
         exit_code = None
 
-        token_re = re.compile(rf"^{re.escape(token)}\s+(\d+)\s*$")
+        done_re = re.compile(rf"^{re.escape(done_token)}\s+(\d+)\s*$")
+        cwd_re  = re.compile(rf"^{re.escape(cwd_token)}\s*$")
+
+        state = "command"
 
         while time.time() - start < timeout_s:
             line = s.proc.stdout.readline()
@@ -100,21 +118,38 @@ class SessionManager:
                 continue
 
             line_stripped = line.rstrip("\n")
-            m = token_re.match(line_stripped)
-            if m:
-                exit_code = int(m.group(1))
-                return {
-                    "ok": True,
-                    "exit_code": exit_code,
-                    "output": "\n".join(output_lines).strip()
-                }
 
-            output_lines.append(line_stripped)
+            if state == "command":
+                m = done_re.match(line_stripped)
+                if m:
+                    exit_code = int(m.group(1))
+                    state = "cwd"
+                    continue
+                cmd_out_lines.append(line_stripped)
 
+            else:  # state == "cwd"
+                if cwd_re.match(line_stripped):
+                    # last non-empty line before cwd_token is the cwd
+                    non_empty = [ln.strip() for ln in cwd_lines if ln.strip()]
+                    new_cwd = non_empty[-1] if non_empty else s.cwd
+                    s.cwd = new_cwd  # <-- auto-track here
+
+                    return {
+                        "ok": True,
+                        "exit_code": exit_code if exit_code is not None else -1,
+                        "output": "\n".join(cmd_out_lines).strip(),
+                        "cwd": new_cwd,
+                        "risk": risk
+                    }
+                cwd_lines.append(line_stripped)
+
+        # timeout
         return {
             "ok": False,
             "error": f"Timeout after {timeout_s}s",
-            "partial_output": "\n".join(output_lines).strip()
+            "partial_output": "\n".join(cmd_out_lines).strip(),
+            "partial_cwd_output": "\n".join(cwd_lines).strip(),
+            "risk": risk
         }
 
     def list_shells(self) -> Dict[str, Dict]:
@@ -155,16 +190,11 @@ def list_shells() -> dict:
 
 @mcp.tool()
 def get_cwd(session_id: str) -> dict:
-    # I define this tool to get the current working directory of a shell session.
-    # This is a simple way to avoid the stale cwd problem. I might change this later to a more robust solution.
+    s = manager.sessions.get(session_id)
+    if not s:
+        return {"ok": False, "error": f"Unknown session_id: {session_id}"}
+    return {"ok": True, "cwd": s.cwd}
 
-    r = manager.run_command(session_id, "pwd", timeout_s=5)
-    if not r.get("ok"):
-        return {"ok": False, "error": r.get("error", "unknown")}
-
-    lines = [ln.strip() for ln in r["output"].splitlines() if ln.strip()]
-    cwd = lines[-1] if lines else ""
-    return {"ok": True, "cwd": cwd}
 
 def main():
     mcp.run()
