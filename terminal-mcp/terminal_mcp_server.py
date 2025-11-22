@@ -10,14 +10,58 @@ from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP(name="Terminal MCP Server")
 
-# This is a minimal safety layer that rejects commands that are known to be dangerous.
+# This is a stronger safety layer that rejects commands that are known to be dangerous.
+HIGH_PATTERNS = [
+    re.compile(r"\brm\b"),
+    re.compile(r"\bmv\b"),
+    re.compile(r"\bcp\b"),
+    re.compile(r"\bchmod\b"),
+    re.compile(r"\bchown\b"),
+    re.compile(r"\bkill\b"),
+    re.compile(r"\bpkill\b"),
+    re.compile(r"\bssh\b"),
+    re.compile(r"\bscp\b"),
+    re.compile(r"\bcurl\b.*\|\s*(sh|bash|zsh)"),  # curl | sh
+    re.compile(r"\bwget\b.*\|\s*(sh|bash|zsh)"),
+    re.compile(r"\bdd\b"),
+    re.compile(r"\bdiskutil\b"),
+    re.compile(r"\bmkfs\b"),
+]
+
+MEDIUM_PATTERNS = [
+    re.compile(r"\bgit\s+clone\b"),
+    re.compile(r"\bpip\s+install\b"),
+    re.compile(r"\bbrew\s+install\b"),
+    re.compile(r"\bnpm\s+install\b"),
+    re.compile(r"\byarn\s+add\b"),
+    re.compile(r"\bcurl\b"),
+    re.compile(r"\bwget\b"),
+]
+
 DENY_PATTERNS = [
     re.compile(r"\brm\s+-rf\s+/\b"),
     re.compile(r"\bsudo\b"),
     re.compile(r"\bshutdown\b"),
     re.compile(r"\breboot\b"),
-    re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*;\s*\}\s*;"), 
+    re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*;\s*\}\s*;"),  # fork bomb
 ]
+
+SANDBOX_ROOT = os.environ.get(
+    "TERMINAL_SANDBOX_ROOT",
+    ""  # empty means sandbox disabled
+)
+SANDBOX_ROOT = os.path.expanduser(SANDBOX_ROOT) if SANDBOX_ROOT else ""
+
+def classify_risk(cmd: str) -> str:
+    lc = cmd.strip().lower()
+    for pat in HIGH_PATTERNS:
+        if pat.search(lc):
+            return "high"
+    for pat in MEDIUM_PATTERNS:
+        if pat.search(lc):
+            return "medium"
+    return "safe"
+
 
 def _is_denied(cmd: str) -> Optional[str]:
     for pat in DENY_PATTERNS:
@@ -134,6 +178,15 @@ class SessionManager:
                     new_cwd = non_empty[-1] if non_empty else s.cwd
                     s.cwd = new_cwd  # <-- auto-track here
 
+                    if SANDBOX_ROOT and not new_cwd.startswith(SANDBOX_ROOT) and not approved:
+                        # close session to avoid running outside sandbox silently
+                        self.close_shell(session_id)
+                        return {
+                            "ok": False,
+                            "error": f"Left sandbox root {SANDBOX_ROOT}. Session closed.",
+                            "cwd": new_cwd,
+                            "risk": risk
+                        }
                     return {
                         "ok": True,
                         "exit_code": exit_code if exit_code is not None else -1,

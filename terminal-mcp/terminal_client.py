@@ -89,10 +89,11 @@ async def run_command(
     session_id: Annotated[str, Field(description="Shell session id from open_shell")],
     command: Annotated[str, Field(description="Terminal command to execute")],
     timeout_s: Annotated[int, Field(description="Timeout in seconds")] = 30,
+    approved: Annotated[bool, Field(description="Whether the command is approved")] = False
 ) -> str:
     res = await terminal_mcp.call_tool(
         "run_command",
-        {"session_id": session_id, "command": command, "timeout_s": timeout_s},
+        {"session_id": session_id, "command": command, "timeout_s": timeout_s, "approved": approved},
     )
     payload = unwrap_mcp_result(res)
 
