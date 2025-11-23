@@ -5,7 +5,7 @@ Test script for the browser history tool.
 import sys
 sys.path.insert(0, '.')
 
-from src.web_agent.tools import get_browser_history
+from web_agent.tools import get_browser_history
 
 print("=== Testing Browser History Tool ===\n")
 
