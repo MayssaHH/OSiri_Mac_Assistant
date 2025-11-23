@@ -126,13 +126,10 @@ async def run_command(
     )
     payload = unwrap_mcp_result(res)
 
-    # The MCP server returns dicts like {"ok":true,"exit_code":0,"output":"..."}
-    if isinstance(payload, dict):
-        if payload.get("ok"):
-            return payload.get("output", "")
-        return f"Command failed: {payload}"
-    return str(payload)
-
+    try:
+        return json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        return str(payload)
 
 @ai_function(
     name="close_shell",
