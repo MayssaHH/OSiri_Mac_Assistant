@@ -17,7 +17,6 @@ if str(parent_dir) not in sys.path:
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.utils.message import get_message_text, new_agent_text_message
-from a2a.utils.parts import get_data_parts
 
 from web_mcp.web_agent import build_planner_agent, build_executor_agent
 from agent_framework.openai import OpenAIChatClient
