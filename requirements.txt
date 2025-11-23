@@ -1,0 +1,7 @@
+agent-framework
+tavily-python
+trafilatura
+python-dotenv
+openai
+
+
