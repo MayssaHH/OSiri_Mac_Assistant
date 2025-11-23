@@ -1,0 +1,7 @@
+openai
+slack_sdk
+python-dotenv
+imap-tools
+pydantic
+mcp
+uvicorn

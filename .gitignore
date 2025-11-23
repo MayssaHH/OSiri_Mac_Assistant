@@ -2,4 +2,5 @@
 .env
 __pycache__/
 terminal-mcp/__pycache__/
-tool_calls.log
+tool_calls.log/
+venv
