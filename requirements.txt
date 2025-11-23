@@ -3,5 +3,8 @@ tavily-python
 trafilatura
 python-dotenv
 openai
+uvicorn
+fastapi
+a2a
 
 

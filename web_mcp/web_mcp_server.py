@@ -1,71 +1,106 @@
+"""
+Web MCP Server
+Exposes web-related tools via Model Context Protocol (MCP).
+Tools: search_web, scrape_url, get_browser_history
+"""
 import os
 import sqlite3
 import shutil
 from datetime import datetime, timedelta
-from tavily import TavilyClient, MissingAPIKeyError
+from mcp.server.fastmcp import FastMCP
+from tavily import TavilyClient
 import trafilatura
 
-def search_web(query: str) -> str:
+mcp = FastMCP(name="Web MCP Server")
+
+# ============================================================================
+# Tool 1: Web Search (Tavily)
+# ============================================================================
+
+@mcp.tool()
+def search_web(query: str) -> dict:
     """
-    Searches the web for information using Tavily.
+    Searches the web for information using Tavily API.
+    
+    Args:
+        query: The search query string
+        
+    Returns:
+        dict with 'ok', 'results' (list of {title, url, content}), or 'error'
     """
     api_key = os.environ.get("TAVILY_API_KEY")
     if not api_key:
-        return "Error: TAVILY_API_KEY is missing in .env file."
-
+        return {"ok": False, "error": "TAVILY_API_KEY not set"}
+    
     try:
         tavily = TavilyClient(api_key)
-        # search_depth="advanced" is key for agents
-        response = tavily.search(query=query)
+        response = tavily.search(query=query, max_results=3, search_depth="advanced")
         
         results = response.get('results', [])
         if not results:
-            return "Search returned no results."
-
-        # Extract context
-        context = []
-        for result in results:
-            title = result.get('title', 'No Title')
-            url = result.get('url', 'No URL')
-            content = result.get('content', '')
-            context.append(f"Title: {title}\nURL: {url}\nContent: {content}\n")
-            
-        return "\n---\n".join(context)
-
-    except MissingAPIKeyError:
-        return "Error: Invalid or Missing Tavily API Key."
+            return {"ok": True, "results": [], "message": "No results found"}
+        
+        # Format results
+        formatted = []
+        for r in results:
+            formatted.append({
+                "title": r.get('title', 'No Title'),
+                "url": r.get('url', ''),
+                "content": r.get('content', '')
+            })
+        
+        return {"ok": True, "results": formatted}
+    
     except Exception as e:
-        # Convert exception to string to let the agent know what happened
-        return f"Search Tool Failed: {repr(e)}"
+        return {"ok": False, "error": f"Search failed: {repr(e)}"}
 
-def scrape_url(url: str) -> str:
+
+# ============================================================================
+# Tool 2: URL Scraping (Trafilatura)
+# ============================================================================
+
+@mcp.tool()
+def scrape_url(url: str) -> dict:
     """
-    Extracts text content from a specific URL.
+    Extracts clean text content from a specific URL.
+    
+    Args:
+        url: The URL to scrape
+        
+    Returns:
+        dict with 'ok', 'text', 'url', or 'error'
     """
     try:
         downloaded = trafilatura.fetch_url(url)
-        if not downloaded: 
-            return "Error: Could not fetch URL (404, blocked, or invalid URL)."
+        if not downloaded:
+            return {"ok": False, "error": "Could not fetch URL (404, blocked, or invalid)"}
+        
         text = trafilatura.extract(downloaded)
-        return text if text else "Error: No text found on page."
+        if not text:
+            return {"ok": False, "error": "No text content found on page"}
+        
+        return {"ok": True, "url": url, "text": text}
+    
     except Exception as e:
-        return f"Scrape Tool Failed: {repr(e)}"
+        return {"ok": False, "error": f"Scrape failed: {repr(e)}"}
 
-def get_browser_history(hours: int = 24, count: int = 10, domain: str = None) -> str:
+
+# ============================================================================
+# Tool 3: Browser History (Safari/Chrome)
+# ============================================================================
+
+@mcp.tool()
+def get_browser_history(hours: int = 24, count: int = 10, domain: str = None) -> dict:
     """
     Retrieves recent browser history from Safari or Chrome.
     
     Args:
-        hours: Look back this many hours (default: 24 for today)
-        count: Maximum number of results to return (default: 10)
-        domain: Optional domain filter (e.g., "github.com", "youtube.com")
-    
+        hours: Look back this many hours (default: 24)
+        count: Maximum number of results (default: 10)
+        domain: Optional domain filter (e.g., "github.com")
+        
     Returns:
-        Formatted list of URLs with titles and timestamps, or error message.
-    
-    Examples:
-        - get_browser_history(hours=24, count=5) -> Last 5 URLs from today
-        - get_browser_history(hours=1, count=10, domain="github.com") -> GitHub visits in last hour
+        dict with 'ok', 'browser', 'results' (list of {timestamp, title, url}), or 'error'
     """
     # Detect browser
     safari_db = os.path.expanduser("~/Library/Safari/History.db")
@@ -91,12 +126,12 @@ def get_browser_history(hours: int = 24, count: int = 10, domain: str = None) ->
             db_path = "/tmp/History_copy"
             browser = "chrome"
         except Exception as e:
-            return f"Error: Could not access Chrome history: {e}"
+            return {"ok": False, "error": f"Could not access Chrome history: {e}"}
     elif os.path.exists(safari_db):
         db_path = safari_db
         browser = "safari"
     else:
-        return "Error: No supported browser history found (Safari or Chrome)."
+        return {"ok": False, "error": "No supported browser history found (Safari or Chrome)"}
     
     try:
         conn = sqlite3.connect(db_path)
@@ -128,7 +163,7 @@ def get_browser_history(hours: int = 24, count: int = 10, domain: str = None) ->
             cursor.execute(query, params)
         
         elif browser == "chrome":
-            # Chrome uses microseconds since 1601-01-01 (Windows epoch)
+            # Chrome uses microseconds since 1601-01-01
             chrome_epoch = datetime(1601, 1, 1)
             timestamp = int((cutoff_time - chrome_epoch).total_seconds() * 1000000)
             
@@ -154,10 +189,15 @@ def get_browser_history(hours: int = 24, count: int = 10, domain: str = None) ->
         
         if not results:
             filter_msg = f" matching domain '{domain}'" if domain else ""
-            return f"No browser history found in the last {hours} hours{filter_msg}."
+            return {
+                "ok": True,
+                "browser": browser,
+                "results": [],
+                "message": f"No history found in the last {hours} hours{filter_msg}"
+            }
         
         # Format output
-        output = []
+        formatted = []
         for url, title, timestamp in results:
             title = title or "No Title"
             # Convert timestamp to human-readable format
@@ -166,10 +206,23 @@ def get_browser_history(hours: int = 24, count: int = 10, domain: str = None) ->
             else:  # chrome
                 visit_time = datetime(1601, 1, 1) + timedelta(microseconds=timestamp)
             
-            time_str = visit_time.strftime("%Y-%m-%d %H:%M:%S")
-            output.append(f"[{time_str}] {title}\nURL: {url}\n")
+            formatted.append({
+                "timestamp": visit_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "title": title,
+                "url": url
+            })
         
-        return "\n---\n".join(output)
+        return {"ok": True, "browser": browser, "results": formatted}
     
     except Exception as e:
-        return f"Error reading browser history: {repr(e)}"
+        return {"ok": False, "error": f"Browser history read failed: {repr(e)}"}
+
+
+def main():
+    """Run the MCP server"""
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()
+
