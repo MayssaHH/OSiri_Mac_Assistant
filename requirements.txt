@@ -1,9 +1,14 @@
-agent-framework 
+agent-framework
+tavily-python
+trafilatura
+python-dotenv
+openai
+uvicorn
+fastapi
+a2a
 mcp 
 anyio
 pydantic
 a2a-sdk
-uvicorn
 httpx
-python-dotenv
 azure-identity
