@@ -1,6 +1,5 @@
 import os
 import uvicorn
-
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
@@ -39,9 +38,9 @@ def build_agent_card(base_url: str) -> AgentCard:
 
 
 def main():
-    host = "127.0.0.1"
-    port = 9999
-    base_url = "http://127.0.0.1:9999/"
+    host = os.getenv("A2A_HOST")
+    port = int(os.getenv("TERMINAL_AGENT_PORT"))
+    base_url = os.getenv("TERMINAL_AGENT_URL")
 
     agent_card = build_agent_card(base_url)
 
