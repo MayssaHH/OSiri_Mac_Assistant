@@ -1,6 +1,26 @@
-.venv/
-.env
+# Python & Environment
 __pycache__/
-terminal-mcp/__pycache__/
-tool_calls.log/
-venv
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# OS Metadata
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+maf_server.log
+email_server.log
+
+# Secrets & Tokens (CRITICAL)
+maf_agent/oauth_credentials.json
+maf_agent/token.json
+oauth_credentials.json
+token.json
+client_secret*.json
+
+# IDE Settings
+.vscode/
+.idea/

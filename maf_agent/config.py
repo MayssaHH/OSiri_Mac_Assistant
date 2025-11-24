@@ -19,10 +19,9 @@ class Config:
         missing = []
         if not cls.OPENAI_API_KEY:
             missing.append("OPENAI_API_KEY")
-        if not cls.SLACK_BOT_TOKEN:
-            missing.append("SLACK_BOT_TOKEN")
-        if not cls.EMAIL_ACCOUNT or not cls.EMAIL_PASSWORD:
-            missing.append("EMAIL_ACCOUNT/EMAIL_PASSWORD")
+        # Slack and Email checks relaxed for testing or if using OAuth
+        # if not cls.SLACK_BOT_TOKEN:
+        #    missing.append("SLACK_BOT_TOKEN")
             
         if missing:
             raise ValueError(f"Missing critical environment variables: {', '.join(missing)}")

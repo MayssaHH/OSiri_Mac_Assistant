@@ -27,12 +27,7 @@ logging.info(f"IMAP_SERVER: {os.getenv('IMAP_SERVER')}")
 logging.info(f"SMTP_SERVER: {os.getenv('SMTP_SERVER')}")
 
 # Initialize Email Manager
-email_manager = EmailManager(
-    email=os.getenv("EMAIL_ACCOUNT"),
-    password=os.getenv("EMAIL_PASSWORD"),
-    imap_server=os.getenv("IMAP_SERVER"),
-    smtp_server=os.getenv("SMTP_SERVER")
-)
+email_manager = EmailManager()
 
 mcp = FastMCP(name="Email MCP Server")
 

@@ -11,12 +11,7 @@ class Orchestrator:
     def __init__(self):
         self.client = OpenAI(api_key=Config.OPENAI_API_KEY)
         self.slack = SlackManager(token=Config.SLACK_BOT_TOKEN)
-        self.email = EmailManager(
-            email=Config.EMAIL_ACCOUNT,
-            password=Config.EMAIL_PASSWORD,
-            imap_server=Config.IMAP_SERVER,
-            smtp_server=Config.SMTP_SERVER
-        )
+        self.email = EmailManager()
         
         # Define Tool Schema
         self.tools_schema = [
@@ -86,69 +81,70 @@ class Orchestrator:
         
         messages = [
             {"role": "system", "content": "You are a helpful AI assistant capable of managing Slack and Email. "
-                                          "When a tool returns raw data (like lists), summarize it nicely for the user."},
+                                          "If a user asks you to perform a multi-step task (e.g. 'read then send'), "
+                                          "perform the first action, analyze the result, and then perform the next action "
+                                          "in a subsequent turn if needed. Do not stop until the full user request is satisfied."},
             {"role": "user", "content": user_prompt}
         ]
 
-        # 1. First call to OpenAI
-        try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                tools=self.tools_schema,
-                tool_choice="auto"
-            )
-        except Exception as e:
-            return f"OpenAI API Error: {str(e)}"
-
-        response_message = response.choices[0].message
-        tool_calls = response_message.tool_calls
-
-        # 2. Check if model wants to use tools
-        if tool_calls:
-            print(f" -> Model requested {len(tool_calls)} tool(s)...")
-            messages.append(response_message)  # extend conversation with assistant's reply
-
-            # 3. Execute tools
-            for tool_call in tool_calls:
-                function_name = tool_call.function.name
-                try:
-                    function_args = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError:
-                    print(f"Error decoding arguments for {function_name}")
-                    function_args = {}
-                
-                print(f" -> Executing {function_name} with {function_args}")
-                
-                tool_output = "Error: Tool not found"
-                
-                if function_name == "read_slack":
-                    tool_output = self.slack.fetch_messages(**function_args)
-                elif function_name == "send_slack":
-                    tool_output = self.slack.post_message(**function_args)
-                elif function_name == "read_email":
-                    tool_output = self.email.fetch_unread(**function_args)
-                elif function_name == "send_email":
-                    tool_output = self.email.send_email(**function_args)
-
-                # 4. Send tool output back to model
-                messages.append({
-                    "tool_call_id": tool_call.id,
-                    "role": "tool",
-                    "name": function_name,
-                    "content": str(tool_output),
-                })
-
-            # 5. Second call to OpenAI to generate final response
-            try:
-                final_response = self.client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=messages
-                )
-                return final_response.choices[0].message.content
-            except Exception as e:
-                return f"OpenAI API Error during final response: {str(e)}"
+        MAX_TURNS = 5  # prevent infinite loops
         
-        else:
-            return response_message.content
+        for _ in range(MAX_TURNS):
+            # Call OpenAI
+            try:
+                response = self.client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=messages,
+                    tools=self.tools_schema,
+                    tool_choice="auto"
+                )
+            except Exception as e:
+                return f"OpenAI API Error: {str(e)}"
 
+            response_message = response.choices[0].message
+            tool_calls = response_message.tool_calls
+
+            # Check if model wants to use tools
+            if tool_calls:
+                print(f" -> Model requested {len(tool_calls)} tool(s)...")
+                messages.append(response_message)  # extend conversation with assistant's reply
+
+                # Execute tools
+                for tool_call in tool_calls:
+                    function_name = tool_call.function.name
+                    try:
+                        function_args = json.loads(tool_call.function.arguments)
+                    except json.JSONDecodeError:
+                        print(f"Error decoding arguments for {function_name}")
+                        function_args = {}
+                    
+                    print(f" -> Executing {function_name} with {function_args}")
+                    
+                    tool_output = "Error: Tool not found"
+                    
+                    if function_name == "read_slack":
+                        tool_output = self.slack.fetch_messages(**function_args)
+                    elif function_name == "send_slack":
+                        tool_output = self.slack.post_message(**function_args)
+                    elif function_name == "read_email":
+                        tool_output = self.email.fetch_unread(**function_args)
+                    elif function_name == "send_email":
+                        tool_output = self.email.send_email(**function_args)
+
+                    # Send tool output back to model
+                    messages.append({
+                        "tool_call_id": tool_call.id,
+                        "role": "tool",
+                        "name": function_name,
+                        "content": str(tool_output),
+                    })
+                
+                # LOOP CONTINUES to next iteration to let the model decide what to do next
+                # (e.g. send the summary it just generated)
+            
+            else:
+                # No tool calls, just a text response.
+                # This might be the final answer or a question to the user.
+                return response_message.content
+        
+        return "Max turns reached. Stopping conversation."
