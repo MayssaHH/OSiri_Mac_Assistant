@@ -100,7 +100,7 @@ async def test_simple_search():
     print("TEST 1: Simple Web Search")
     print("="*60)
     
-    task = "Search for the latest macOS version and tell me what it is"
+    task = "Find the last article I read today, and summarize it in 7 bullet points,"
     result = await send_task(task)
     
     if result:
