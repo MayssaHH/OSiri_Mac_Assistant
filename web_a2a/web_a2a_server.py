@@ -11,7 +11,7 @@ from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill
-from web_a2a_executer import WebAgentExecutor
+from .web_a2a_executer import WebAgentExecutor
 from dotenv import load_dotenv
 
 
@@ -50,9 +50,9 @@ def build_agent_card(base_url: str) -> AgentCard:
 
 
 def main():
-    host = os.getenv("A2A_HOST")
-    port = int(os.getenv("WEB_AGENT_PORT"))
-    base_url = os.getenv("WEB_AGENT_URL")
+    host = os.getenv("A2A_HOST", "127.0.0.1")
+    port = int(os.getenv("WEB_AGENT_PORT", "9998"))
+    base_url = os.getenv("WEB_AGENT_URL", f"http://{host}:{port}")
 
     agent_card = build_agent_card(base_url)
 
