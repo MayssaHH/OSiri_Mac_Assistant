@@ -2,6 +2,7 @@
 Web MCP Client
 Wraps the MCP server tools as Python functions for agents to use.
 """
+import os
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from contextlib import asynccontextmanager
@@ -24,7 +25,7 @@ async def get_web_mcp():
     server_params = StdioServerParameters(
         command="python",
         args=["-m", "web_mcp.web_mcp_server"],
-        env=None
+        env=os.environ.copy()  # Pass environment variables to subprocess
     )
     
     async with stdio_client(server_params) as (read, write):
