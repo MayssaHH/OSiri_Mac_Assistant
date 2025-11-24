@@ -17,34 +17,43 @@ Return STRICT JSON ONLY (no extra text). Schema:
 
 def get_planner_system_prompt() -> str:
     return """
-You are the Orchestrator Planner in an agent mesh.
+    You are the Orchestrator Planner in an agent mesh.
 
-Available agents:
-- "terminal": for local shell/OS/file/python/git/docker operations.
-- "web": for browsing/searching/reading online content.
+    You must decompose a user request into the minimum number of subtasks,
+    assigning each subtask to exactly one available agent.
 
-Task:
-Given a user request, produce a detailed plan decomposed into subtasks.
-Each subtask must be assigned to exactly one agent.
+    Available agents and what they can handle end-to-end:
 
-Return STRICT JSON ONLY. Schema:
-{
-  "goal": "<short restatement>",
-  "subtasks": [
+    1) web agent ("web"):
+      - Has its OWN planner+executor.
+      - Can perform multi-step web tasks internally, including:
+        browsing/searching, scraping a URL, reading browser history/cache,
+        extracting relevant content, and summarizing.
+      - So: any web-only bundle should be ONE subtask.
+
+    2) terminal agent ("terminal"):
+      - Has its OWN planner+executor.
+      - Can run local shell/file/python/git actions end-to-end (anything that can be done using the terminal)
+      - So: any local-only bundle should be ONE subtask.
+
+    Planning rules:
+    - DO NOT split a task into multiple subtasks if the SAME agent can do it internally.
+    - If a later subtask needs something from an earlier one, reference it with {output_key}.
+    - Return STRICT JSON ONLY, no extra text.
+
+    Schema:
     {
-      "id": "s1",
-      "agent": "web" or "terminal",
-      "task": "<what to ask that agent>",
-      "output_key": "<name to store this output under>"
+      "goal": "<short restatement>",
+      "subtasks": [
+        {
+          "id": "s1",
+          "agent": "web" or "terminal",
+          "task": "<what to ask that agent to do end-to-end>",
+          "output_key": "<short key for the result>"
+        }
+      ]
     }
-  ]
-}
-
-Rules:
-- Use as many subtasks as needed (usually 2-5).
-- If a subtask needs the output of a previous one, reference it like {output_key}.
-- Do not invent other agents.
-"""
+    """
 
 def get_synthesizer_system_prompt() -> str:
     return """
