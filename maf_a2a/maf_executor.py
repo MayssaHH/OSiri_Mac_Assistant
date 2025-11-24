@@ -13,7 +13,17 @@ root_dir = Path(__file__).parent.parent
 if str(root_dir) not in sys.path:
     sys.path.append(str(root_dir))
 
-from maf_mcp.maf_client import read_slack, send_slack, read_email, send_email, maf_mcp
+# Update imports to match the new functions available in maf_client
+from maf_mcp.maf_client import (
+    slack_list_channels, 
+    slack_post_message, 
+    slack_reply_to_thread, 
+    slack_add_reaction, 
+    slack_get_channel_history,
+    slack_get_user_profile,  # New Import
+    read_email,
+    send_email
+)
 
 load_dotenv()
 
@@ -28,17 +38,27 @@ class MafAgentExecutor(AgentExecutor):
         self.agent = client.create_agent(
             name="MafAssistant",
             instructions=(
-                "You are a helpful assistant capable of reading/sending Slack messages and Emails using your tools. "
-                "Always verify the tool output and summarize it clearly for the user."
+                "You are a helpful assistant capable of managing Slack and Email using separate MCP servers. "
+                "You have tools for both Slack (posting, reading, reacting, getting user info) and Email (reading, sending). "
+                "Always verify the tool output and summarize it clearly for the user. "
+                "Note: Slack tools often require Channel IDs, use slack_list_channels to find them if needed."
             ),
-            tools=[read_slack, send_slack, read_email, send_email],
+            tools=[
+                slack_list_channels, 
+                slack_post_message, 
+                slack_reply_to_thread, 
+                slack_add_reaction, 
+                slack_get_channel_history,
+                slack_get_user_profile, # New Tool
+                read_email,
+                send_email
+            ],
         )
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_text = get_message_text(context.message)
         
         # Run the agent
-        # Note: ensure agent.run returns an object with .text
         try:
             result = await self.agent.run(task_text)
             response_text = result.text
@@ -52,4 +72,3 @@ class MafAgentExecutor(AgentExecutor):
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         pass
-

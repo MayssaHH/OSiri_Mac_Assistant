@@ -12,6 +12,7 @@ class EmailManager:
 
     def fetch_unread(self, limit: int = 5) -> str:
         """Fetches unread emails from the Inbox."""
+        print(f"DEBUG: Connecting to IMAP {self.imap_server} as {self.email}...")
         try:
             summary = []
             # Using imap-tools for cleaner API
@@ -31,18 +32,29 @@ class EmailManager:
             return f"Error fetching emails: {str(e)}"
 
     def send_email(self, to_email: str, subject: str, body: str) -> str:
-        """Sends an email using SMTP_SSL."""
+        """Sends an email using SMTP with STARTTLS (port 587) or SSL (port 465)."""
         msg = MIMEText(body)
         msg['Subject'] = subject
         msg['From'] = self.email
         msg['To'] = to_email
 
         try:
-            # Standard SMTP_SSL port is 465
-            with smtplib.SMTP_SSL(self.smtp_server, 465) as smtp_server:
-                smtp_server.login(self.email, self.password)
-                smtp_server.sendmail(self.email, to_email, msg.as_string())
-            return f"Email sent successfully to {to_email}"
+            # Try STARTTLS on port 587 first (for Outlook.com / modern providers)
+            try:
+                with smtplib.SMTP(self.smtp_server, 587) as smtp:
+                    smtp.ehlo()
+                    smtp.starttls()
+                    smtp.ehlo()
+                    smtp.login(self.email, self.password)
+                    smtp.send_message(msg)
+                return f"Email sent successfully to {to_email} (via STARTTLS)"
+            except Exception as starttls_err:
+                print(f"DEBUG: STARTTLS failed: {starttls_err}, trying SSL...")
+                # Fall back to SSL on port 465 (for Gmail / legacy)
+                with smtplib.SMTP_SSL(self.smtp_server, 465) as smtp:
+                    smtp.login(self.email, self.password)
+                    smtp.sendmail(self.email, to_email, msg.as_string())
+                return f"Email sent successfully to {to_email} (via SSL)"
         except Exception as e:
             return f"Error sending email: {str(e)}"
 

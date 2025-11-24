@@ -1,0 +1,25 @@
+2025-11-24 18:54:36,490 - INFO - Email MCP Server starting...
+2025-11-24 18:54:36,490 - INFO - EMAIL_ACCOUNT: AGPROJ1@outlook.com
+2025-11-24 18:54:36,490 - INFO - IMAP_SERVER: imap-mail.outlook.com
+2025-11-24 18:54:36,490 - INFO - SMTP_SERVER: smtp-mail.outlook.com
+2025-11-24 18:54:36,494 - DEBUG - Initializing server 'Email MCP Server'
+2025-11-24 18:54:36,494 - DEBUG - Registering handler for ListToolsRequest
+2025-11-24 18:54:36,494 - DEBUG - Registering handler for CallToolRequest
+2025-11-24 18:54:36,494 - DEBUG - Registering handler for ListResourcesRequest
+2025-11-24 18:54:36,494 - DEBUG - Registering handler for ReadResourceRequest
+2025-11-24 18:54:36,494 - DEBUG - Registering handler for PromptListRequest
+2025-11-24 18:54:36,503 - DEBUG - Registering handler for GetPromptRequest
+2025-11-24 18:54:36,503 - DEBUG - Registering handler for ListResourceTemplatesRequest
+2025-11-24 18:54:36,510 - DEBUG - Using proactor: IocpProactor
+2025-11-24 18:54:36,517 - DEBUG - Received message: root=InitializedNotification(method='notifications/initialized', params=None, jsonrpc='2.0')
+2025-11-24 18:54:36,518 - DEBUG - Received message: <mcp.shared.session.RequestResponder object at 0x000001B501F1F7D0>
+2025-11-24 18:54:36,518 - INFO - Processing request of type CallToolRequest
+2025-11-24 18:54:36,518 - DEBUG - Dispatching request of type CallToolRequest
+2025-11-24 18:54:36,518 - DEBUG - Tool cache miss for read_email, refreshing cache
+2025-11-24 18:54:36,519 - INFO - read_email called with limit=10
+2025-11-24 18:54:37,518 - INFO - read_email result: Error fetching emails: Response status "OK" expected, but "NO" received. Data: [b'LOGIN failed.']...
+2025-11-24 18:54:37,524 - DEBUG - Response sent
+2025-11-24 18:54:37,525 - DEBUG - Received message: <mcp.shared.session.RequestResponder object at 0x000001B5020210D0>
+2025-11-24 18:54:37,525 - INFO - Processing request of type ListToolsRequest
+2025-11-24 18:54:37,525 - DEBUG - Dispatching request of type ListToolsRequest
+2025-11-24 18:54:37,526 - DEBUG - Response sent
