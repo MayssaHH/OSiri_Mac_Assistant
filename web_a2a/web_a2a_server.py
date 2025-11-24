@@ -24,8 +24,8 @@ def build_agent_card(base_url: str) -> AgentCard:
         id="web_assistant",
         name="Web Assistant",
         description=(
-            "Performs web searches, scrapes URLs, and accesses browser history. "
-            "Uses internal planner+executor with MCP-backed web tools."
+            "Performs web searches, scrapes URLs, and accesses browser history."
+            "Uses internal planner+executor to solve multi-step web tasks end-to-end."
         ),
         tags=["web", "search", "scraping", "browser"],
         examples=[
@@ -38,7 +38,7 @@ def build_agent_card(base_url: str) -> AgentCard:
 
     return AgentCard(
         name="Web A2A Server",
-        description="Remote web agent exposing search, scraping, and browser history via MCP.",
+        description="Remote web agent exposing search, scraping, and browser history, using internal planner+executor to solve multi-step web tasks end-to-end.",
         url=base_url,
         version="0.1.0",
         default_input_modes=["text"],

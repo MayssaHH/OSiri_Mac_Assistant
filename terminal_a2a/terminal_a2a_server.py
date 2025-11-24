@@ -14,7 +14,7 @@ def build_agent_card(base_url: str) -> AgentCard:
         name="Terminal Assistant",
         description=(
             "Plans and executes safe terminal tasks on the host machine. "
-            "Uses internal planner+executor with MCP-backed shell control."
+            "Uses internal planner+executor to solve multi-step terminal tasks end-to-end locally."
         ),
         tags=["terminal", "shell"],
         examples=[
@@ -26,7 +26,7 @@ def build_agent_card(base_url: str) -> AgentCard:
 
     return AgentCard(
         name="Terminal A2A Server",
-        description="Single remote terminal agent exposing planning + execution via MCP.",
+        description="Remote terminal agent executing safe terminal tasks on the host machine, using internal planner+executor to solve multi-step terminal tasks end-to-end locally.",
         url=base_url,
         version="0.1.0",
         default_input_modes=["text"],
