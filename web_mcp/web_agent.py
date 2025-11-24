@@ -7,7 +7,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Callable, Awaitable
-from .web_client import search_web, scrape_url, get_browser_history
+from .web_client import search_web, scrape_url, get_browser_history, filter_browser_history
 from agent_framework import AgentRunContext, FunctionInvocationContext
 from agent_framework.openai import OpenAIChatClient
 from .prompt import get_system_prompt, get_planner_prompt, get_execution_prompt
@@ -76,7 +76,7 @@ def build_agent():
         name="WebAssistant",
         description="An agent that performs web searches, scrapes URLs, and accesses browser history.",
         instructions=get_system_prompt(),
-        tools=[search_web, scrape_url, get_browser_history],
+        tools=[search_web, scrape_url, get_browser_history, filter_browser_history],
         middleware=[agent_run_logger, function_call_logger],
     )
     return agent
@@ -102,7 +102,7 @@ def build_executor_agent(client):
     return client.create_agent(
         name="WebTaskExecutor",
         instructions=get_execution_prompt(),
-        tools=[search_web, scrape_url, get_browser_history],
+        tools=[search_web, scrape_url, get_browser_history, filter_browser_history],
         middleware=[agent_run_logger, function_call_logger],
     )
 

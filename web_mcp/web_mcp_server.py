@@ -10,8 +10,15 @@ from datetime import datetime, timedelta
 from mcp.server.fastmcp import FastMCP
 from tavily import TavilyClient
 import trafilatura
+import json
+from openai import OpenAI
+
 
 mcp = FastMCP(name="Web MCP Server")
+
+openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+FILTER_MODEL = "gpt-4o-mini"
+
 
 # ============================================================================
 # Tool 1: Web Search (Tavily)
@@ -217,6 +224,69 @@ def get_browser_history(hours: int = 24, count: int = 10, domain: str = None) ->
     except Exception as e:
         return {"ok": False, "error": f"Browser history read failed: {repr(e)}"}
 
+@mcp.tool()
+def filter_browser_history(history: list, intent: str, top_k: int = 1) -> dict:
+    """
+    Use an LLM to filter browser history based on user intent.
+    Args:
+        history: list of {timestamp,title,url} (most recent first)
+        intent: e.g. "last article I read", "papers", "news", "blogs", etc.
+        top_k: how many matching items to return
+    Returns:
+        {ok, selected, selected_indices, llm_notes}
+    """
+    if not history:
+        return {"ok": True, "selected": [], "selected_indices": [], "llm_notes": "empty history"}
+
+    # Shrink payload for the LLM
+    items = [
+        {"i": i, "title": (h.get("title") or ""), "url": (h.get("url") or "")}
+        for i, h in enumerate(history)
+    ]
+
+    prompt = f"""
+        You are selecting which browser history entries are actual readable and relevant content that matches the user's intent.
+
+        User intent:
+        {intent}
+
+        History items (most recent first):
+        {json.dumps(items, ensure_ascii=False)}
+
+        Rules:
+        - Prefer real articles/blogs/news/papers/tutorial pages.
+        - Exclude chats (chatgpt, slack, discord), login pages
+
+        Return STRICT JSON ONLY in the form:
+        {{"selected_indices":[...], "notes":"short reason"}}
+
+        Pick at most {top_k} indices.
+        """.strip()
+
+    try:
+        resp = openai_client.chat.completions.create(
+            model=FILTER_MODEL,
+            messages=[
+                {"role": "system", "content": "Return strict JSON only."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+        data = json.loads(text)
+
+        indices = data.get("selected_indices", [])
+        selected = [history[i] for i in indices if isinstance(i, int) and 0 <= i < len(history)]
+
+        return {
+            "ok": True,
+            "selected": selected,
+            "selected_indices": indices,
+            "llm_notes": data.get("notes", "")
+        }
+
+    except Exception as e:
+        return {"ok": False, "error": f"LLM filter failed: {repr(e)}"}
 
 def main():
     """Run the MCP server"""

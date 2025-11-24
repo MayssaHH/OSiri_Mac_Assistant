@@ -94,3 +94,15 @@ async def get_browser_history(hours: int = 24, count: int = 10, domain: str = No
             return json.loads(text) if isinstance(text, str) else text
         return {"ok": False, "error": "No response"}
 
+async def filter_browser_history(history: list, intent: str, top_k: int = 1) -> dict:
+    """
+    LLM-based filter over history entries.
+    """
+    args = {"history": history, "intent": intent, "top_k": top_k}
+
+    async with get_web_mcp() as session:
+        result = await session.call_tool("filter_browser_history", arguments=args)
+        if result.content:
+            text = result.content[0].text
+            return json.loads(text) if isinstance(text, str) else text
+        return {"ok": False, "error": "No response"}
