@@ -49,8 +49,8 @@ class EmailManager:
     def authenticate(self):
         """Handles OAuth2 Flow"""
         # Use absolute paths or relative to CWD. Assuming CWD is project root.
-        creds_path = 'maf_agent/oauth_credentials.json'
-        token_path = 'maf_agent/token.json'
+        creds_path = 'app/maf_agent/oauth_credentials.json'
+        token_path = 'app/maf_agent/token.json'
         
         if not os.path.exists(creds_path) and os.path.exists('oauth_credentials.json'):
              creds_path = 'oauth_credentials.json'
