@@ -1,6 +1,7 @@
 import uvicorn
 import sys
 from pathlib import Path
+import os
 
 # Ensure we can import from sibling directories if needed
 root_dir = Path(__file__).parent.parent
@@ -12,36 +13,48 @@ from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCard, AgentSkill, AgentCapabilities
 
-from maf_executor import MafAgentExecutor
+from .maf_executor import MafAgentExecutor
 
 def build_agent_card(base_url: str) -> AgentCard:
-    maf_skill = AgentSkill(
-        id="maf_assistant",
-        name="MAF Assistant",
-        description="Manages Slack and Email communications.",
-        tags=["slack", "email", "communication"],
+    """
+    Application Agent (Slack + Gmail) A2A card.
+    This is what other agents/orchestrators will discover.
+    """
+    app_skill = AgentSkill(
+        id="app_assistant",
+        name="Application Assistant",
+        description=(
+            "Agent that can manage Slack and Email (Gmail) workflows using MCP-backed tools. "
+            "It can read emails, summarize them, and post to Slack channels, as well as send emails "
+            "based on Slack information or user instructions."
+        ),
         examples=[
-            "Check my unread emails",
-            "Send a slack message to #general saying hello",
+            "Read my last 3 unread emails and post a one-line summary of each to #general.",
+            "Send an email to my manager summarizing today’s Slack standup.",
+            "List my Slack channels and post a status update in #random.",
         ],
+        tags=["slack", "email", "applications"],
     )
 
     return AgentCard(
-        name="MAF A2A Server",
-        description="Agent capable of Slack and Email operations via MCP.",
+        name="Application A2A Server",
+        description="Unified application agent for Slack and Gmail operations.",
         url=base_url,
         version="0.1.0",
-        default_input_modes=["text"],
-        default_output_modes=["text"],
+        protocolVersion="0.3.0",
+        preferredTransport="JSONRPC",
         capabilities=AgentCapabilities(streaming=False),
-        skills=[maf_skill],
-        supports_authenticated_extended_card=False,
+        skills=[app_skill],
+        defaultInputModes=["text"],
+        defaultOutputModes=["text"],
+        supportsAuthenticatedExtendedCard=False,
     )
 
+
 def main():
-    host = "127.0.0.1"
-    port = 9000 # Different port from terminal agent (usually 9999)
-    base_url = f"http://{host}:{port}/"
+    host = os.getenv("A2A_HOST")
+    port = int(os.getenv("APP_AGENT_PORT"))
+    base_url = os.getenv("APP_AGENT_URL")
 
     agent_card = build_agent_card(base_url)
 
