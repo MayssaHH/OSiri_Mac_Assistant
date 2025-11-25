@@ -50,6 +50,8 @@ htmlcov/
 
 # Logs
 *.log
+maf_server.log
+email_server.log
 
 # Database copies (browser history temp files)
 /tmp/History_copy
@@ -58,8 +60,19 @@ htmlcov/
 .DS_Store
 .AppleDouble
 .LSOverride
+Thumbs.db
 
 # Temporary files
 *.tmp
 *.bak
 *.swp
+
+# Secrets & Tokens (CRITICAL)
+maf_agent/oauth_credentials.json
+maf_agent/token.json
+oauth_credentials.json
+token.json
+client_secret*.json
+
+# IDE Settings
+.vscode/
