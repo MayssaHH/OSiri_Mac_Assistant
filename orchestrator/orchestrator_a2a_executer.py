@@ -35,8 +35,9 @@ load_dotenv()
 
 TERMINAL_URL = os.getenv("TERMINAL_AGENT_URL")
 WEB_URL = os.getenv("WEB_AGENT_URL")
+APP_URL = os.getenv("APP_AGENT_URL")
 
-ALLOWED_AGENTS = ["terminal", "web"]
+ALLOWED_AGENTS = ["terminal", "web", "app"]
 
 async def call_downstream(agent_url: str, user_text: str, data_parts: Optional[list] = None) -> Dict[str, Any]:
     logger.info(f"[call_downstream] Initiating call to agent at {agent_url}")
@@ -131,7 +132,16 @@ class OrchestratorExecutor(AgentExecutor):
             # simple variable substitution from state
             task_filled = task_template.format(**state)
 
-            agent_url = TERMINAL_URL if agent == "terminal" else WEB_URL
+            # Route to appropriate agent URL
+            if agent == "terminal":
+                agent_url = TERMINAL_URL
+            elif agent == "web":
+                agent_url = WEB_URL
+            elif agent == "app":
+                agent_url = APP_URL
+            else:
+                # Fallback to web if unknown agent
+                agent_url = WEB_URL
             downstream_res = await call_downstream(agent_url, task_filled, data_parts=data_parts)
 
             trace.append({
@@ -162,7 +172,8 @@ class OrchestratorExecutor(AgentExecutor):
             
             # Extract the actual result from the response
             if isinstance(downstream_res, dict):
-                # Web agent format: extract final_result from execution
+                # Web agent and App agent format: extract final_result from execution
+                # Both return {"plan": {...}, "execution": {"final_result": "...", ...}}
                 if "execution" in downstream_res and isinstance(downstream_res["execution"], dict):
                     final_result = downstream_res["execution"].get("final_result")
                     if final_result:
