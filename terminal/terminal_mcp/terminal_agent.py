@@ -3,9 +3,19 @@ import json
 import logging
 from datetime import datetime
 from typing import Callable, Awaitable
-from .terminal_client import open_shell, run_command, close_shell, list_shells, get_cwd, terminal_mcp
-from agent_framework import AgentRunContext, FunctionInvocationContext # type: ignore
-from agent_framework.openai import OpenAIChatClient   # type: ignore
+
+from .terminal_client import (
+    open_shell,
+    run_command,
+    close_shell,
+    list_shells,
+    get_cwd,
+    undo_last,
+    get_undo_history,
+    terminal_mcp,
+)
+from agent_framework import AgentRunContext, FunctionInvocationContext  # type: ignore
+from agent_framework.openai import OpenAIChatClient  # type: ignore
 from .prompt import get_system_prompt, get_planner_prompt, get_execution_prompt
 from dotenv import load_dotenv
 
@@ -60,7 +70,7 @@ def build_agent():
         name="TerminalAssistant",
         description="An agent that executes terminal commands through a local MCP server.",
         instructions=get_system_prompt(),
-        tools=[open_shell, run_command, close_shell, list_shells, get_cwd],
+        tools=[open_shell, run_command, close_shell, list_shells, get_cwd, undo_last, get_undo_history],
         middleware=[agent_run_logger, function_call_logger],
     )
     return agent
@@ -76,7 +86,7 @@ def build_executor_agent(client):
     return client.create_agent(
         name="TerminalAssistantExecutor",
         instructions=get_execution_prompt(),
-        tools=[open_shell, run_command, close_shell, list_shells, get_cwd],
+        tools=[open_shell, run_command, close_shell, list_shells, get_cwd, undo_last, get_undo_history],
         middleware=[agent_run_logger, function_call_logger],
     )
 

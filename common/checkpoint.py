@@ -31,9 +31,13 @@ Usage:
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+from pathlib import Path
 import uuid
 import re
 import logging
+import os
+import json
+import shutil
 
 logger = logging.getLogger("checkpoint")
 
@@ -66,6 +70,16 @@ class TerminalCheckpoint:
     result: Dict[str, Any] = field(default_factory=dict)
     undo_command: Optional[str] = None
 
+    # Deletion/back-up metadata (Phase 1 – not yet wired into run_command/undo)
+    #
+    # When we later support reversible deletions, these fields will hold:
+    # - backup_path: directory where backups for this checkpoint are stored
+    # - deleted_items: list of deleted filesystem objects with metadata
+    # - is_deletion: flag indicating this command deleted something
+    backup_path: Optional[str] = None
+    deleted_items: List[Dict[str, Any]] = field(default_factory=list)
+    is_deletion: bool = False
+
     @property
     def reversible(self) -> bool:
         """Returns True if this command can be undone"""
@@ -83,6 +97,9 @@ class TerminalCheckpoint:
             "result": self.result,
             "undo_command": self.undo_command,
             "reversible": self.reversible,
+            "backup_path": self.backup_path,
+            "deleted_items": self.deleted_items,
+            "is_deletion": self.is_deletion,
         }
 
 
@@ -133,83 +150,374 @@ class WebCheckpoint:
 
 
 # ============================================================================
+# Deletion Detection & Backup (Phase 1 infrastructure)
+# ============================================================================
+
+
+class DeletionDetector:
+    """
+    Detects deletion-style shell commands and extracts their targets.
+
+    This is *syntax-level* detection only. It does not touch the filesystem.
+
+    Supported patterns (initial set):
+    - rm <path>...
+    - rm -r|-rf|-f <path>...
+    - rmdir <path>...
+
+    Returned format (per item):
+        {
+            "original_arg": "<as in command>",
+            "path": "/abs/path",
+            "is_dir": bool,
+        }
+    """
+
+    _RM_RE = re.compile(r"^rm\s+(.+)$")
+    _RMDIR_RE = re.compile(r"^rmdir\s+(.+)$")
+
+    def _split_args(self, arg_str: str) -> List[str]:
+        """
+        Very small arg splitter. We keep this conservative (no full shell parsing).
+        """
+        return [p for p in arg_str.strip().split() if p]
+
+    def _normalize_path(self, raw: str, cwd_before: str) -> str:
+        """
+        Convert a raw path argument to an absolute normalized path.
+        """
+        # Expand user (~) and env vars
+        expanded = os.path.expanduser(os.path.expandvars(raw))
+        p = Path(expanded)
+        if not p.is_absolute():
+            p = Path(cwd_before) / p
+        return str(p.resolve())
+
+    def detect(self, command: str, cwd_before: str) -> List[Dict[str, Any]]:
+        """
+        Detect deletion targets for a command.
+
+        Returns a list of target dicts. Empty list means "not a deletion"
+        (or nothing we can confidently reason about).
+        """
+        cmd = command.strip()
+        targets: List[Dict[str, Any]] = []
+
+        # rm ...
+        m = self._RM_RE.match(cmd)
+        if m:
+            raw_args = self._split_args(m.group(1))
+            # Strip leading flags (-r, -rf, -f, etc.)
+            path_args = [a for a in raw_args if not a.startswith("-")]
+            for arg in path_args:
+                abs_path = self._normalize_path(arg, cwd_before)
+                targets.append(
+                    {
+                        "original_arg": arg,
+                        "path": abs_path,
+                        # We don't hit the filesystem here; caller can refine
+                        "is_dir": abs_path.endswith(os.sep),
+                    }
+                )
+            return targets
+
+        # rmdir ...
+        m = self._RMDIR_RE.match(cmd)
+        if m:
+            raw_args = self._split_args(m.group(1))
+            for arg in raw_args:
+                abs_path = self._normalize_path(arg, cwd_before)
+                targets.append(
+                    {
+                        "original_arg": arg,
+                        "path": abs_path,
+                        "is_dir": True,
+                    }
+                )
+            return targets
+
+        return targets
+
+
+class BackupManager:
+    """
+    Manages filesystem backups for potentially destructive terminal commands.
+
+    Phase 1: defines structure and helpers, *without* being wired into
+    run_command/undo yet.
+
+    Backup layout (per task/checkpoint):
+        base_dir/
+          {task_id}/
+            {checkpoint_id}/
+              metadata.json
+              data/
+                item_00001
+                item_00002
+
+    The actual content format (file vs directory tarball, etc.) is left flexible
+    for later phases.
+    """
+
+    def __init__(self, base_dir: Optional[str] = None):
+        self.base_dir = Path(
+            base_dir or os.path.join(os.path.expanduser("~"), ".checkpoint_backups")
+        )
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"BackupManager initialized at {self.base_dir}")
+
+    # ----- Path helpers -----------------------------------------------------
+
+    def task_checkpoint_dir(self, task_id: str, checkpoint_id: str) -> Path:
+        """
+        Directory that will hold backups for a specific checkpoint.
+        """
+        return self.base_dir / task_id / checkpoint_id
+
+    def metadata_path(self, task_id: str, checkpoint_id: str) -> Path:
+        return self.task_checkpoint_dir(task_id, checkpoint_id) / "metadata.json"
+
+    def data_dir(self, task_id: str, checkpoint_id: str) -> Path:
+        return self.task_checkpoint_dir(task_id, checkpoint_id) / "data"
+
+    # ----- Planning (no/limited I/O) ----------------------------------------
+
+    def plan_backup_layout(
+        self,
+        task_id: str,
+        checkpoint_id: str,
+        deleted_items: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Compute where backups *would* be stored for a given deletion checkpoint.
+
+        This is a pure helper that does not touch the filesystem directly
+        (aside from ensuring parent dirs exist).
+        """
+        cp_dir = self.task_checkpoint_dir(task_id, checkpoint_id)
+        data_dir = self.data_dir(task_id, checkpoint_id)
+        cp_dir.mkdir(parents=True, exist_ok=True)
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        layout: Dict[str, Any] = {
+            "checkpoint_dir": str(cp_dir),
+            "data_dir": str(data_dir),
+            "items": [],
+        }
+
+        for idx, item in enumerate(deleted_items, start=1):
+            item_id = f"item_{idx:05d}"
+            layout["items"].append(
+                {
+                    "item_id": item_id,
+                    "original_path": item.get("path"),
+                    "original_arg": item.get("original_arg"),
+                    "is_dir": bool(item.get("is_dir")),
+                    "backup_path": str(data_dir / item_id),
+                }
+            )
+
+        return layout
+
+    def write_metadata(
+        self,
+        task_id: str,
+        checkpoint_id: str,
+        meta: Dict[str, Any],
+    ) -> None:
+        """
+        Persist backup metadata to disk for later inspection/restore.
+        """
+        meta_path = self.metadata_path(task_id, checkpoint_id)
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        with meta_path.open("w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+
+    # ----- Backup & Restore (Phase 3) ---------------------------------------
+
+    def backup_deleted_items(
+        self,
+        task_id: str,
+        checkpoint_id: str,
+        deleted_items: List[Dict[str, Any]],
+        *,
+        command: str,
+        cwd_before: str,
+    ) -> str:
+        """
+        Create on-disk backups for deleted items and persist metadata.
+
+        Returns:
+            The checkpoint backup directory path (string).
+        """
+        layout = self.plan_backup_layout(
+            task_id=task_id,
+            checkpoint_id=checkpoint_id,
+            deleted_items=deleted_items,
+        )
+
+        # Copy content
+        for item_layout in layout["items"]:
+            src = Path(item_layout["original_path"])
+            dst = Path(item_layout["backup_path"])
+
+            if not src.exists():
+                # Nothing to back up (already gone)
+                continue
+
+            if item_layout["is_dir"]:
+                # Ensure parent exists and copy directory tree
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+
+        meta = {
+            "task_id": task_id,
+            "backup_id": checkpoint_id,
+            "command": command,
+            "cwd_before": cwd_before,
+            "deleted_items": deleted_items,
+            "layout": layout,
+        }
+        self.write_metadata(task_id, checkpoint_id, meta)
+        return layout["checkpoint_dir"]
+
+    def restore_from_checkpoint_dir(self, checkpoint_dir: str) -> Dict[str, Any]:
+        """
+        Restore files/directories from a backup checkpoint directory.
+
+        Args:
+            checkpoint_dir: Path returned by backup_deleted_items / plan_backup_layout
+
+        Returns:
+            Dict with {ok, restored_count, errors}
+        """
+        cp_path = Path(checkpoint_dir)
+        meta_path = cp_path / "metadata.json"
+
+        if not meta_path.exists():
+            return {
+                "ok": False,
+                "restored_count": 0,
+                "errors": [f"metadata.json not found in {checkpoint_dir}"],
+            }
+
+        with meta_path.open("r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        layout = meta.get("layout") or {}
+        items = layout.get("items") or []
+
+        restored = 0
+        errors: List[str] = []
+
+        for item in items:
+            src = Path(item.get("backup_path", ""))
+            dst = Path(item.get("original_path", ""))
+            is_dir = bool(item.get("is_dir"))
+
+            if not src.exists():
+                errors.append(f"backup missing for {dst}")
+                continue
+
+            try:
+                if is_dir:
+                    # Remove existing destination (if any) then restore
+                    if dst.exists():
+                        shutil.rmtree(dst)
+                    shutil.copytree(src, dst)
+                else:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+                restored += 1
+            except Exception as e:
+                errors.append(f"failed to restore {dst}: {e}")
+
+        return {
+            "ok": len(errors) == 0,
+            "restored_count": restored,
+            "errors": errors,
+        }
+
+
+# ============================================================================
 # Undo Command Generator
 # ============================================================================
 
+
 class UndoGenerator:
     """
-    Generates undo commands for reversible shell operations.
-    
-    Supported operations:
-    - mkdir -> rmdir
-    - touch -> rm (for new files)
-    - cd -> cd back to previous directory
-    - echo/cat > file -> rm (for new files)
-    
-    Destructive operations (rm, mv, cp) are NOT reversible - they require
-    user approval and thus don't need undo support.
+    Generates undo commands for reversible *non-destructive* shell operations.
+
+    NOTE: Destructive operations (rm, mv, cp, chmod, chown, etc.) remain
+    non-reversible at the command level. Deletion undo will instead be
+    implemented via backups handled by BackupManager, not by synthesizing
+    shell commands here.
     """
 
     def generate(self, command: str, cwd_before: str) -> Optional[str]:
         """
         Generate an undo command for the given shell command.
-        
+
         Args:
             command: The shell command that was executed
             cwd_before: The working directory before execution
-            
+
         Returns:
             The undo command string, or None if not reversible
         """
         cmd = command.strip()
-        
+
         # mkdir [-p] <path>
-        m = re.match(r'^mkdir\s+(?:-p\s+)?(.+)$', cmd)
+        m = re.match(r"^mkdir\s+(?:-p\s+)?(.+)$", cmd)
         if m:
             path = m.group(1).strip()
             # Handle multiple paths
             paths = path.split()
             if len(paths) == 1:
-                return f'rmdir {path}'
+                return f"rmdir {path}"
             else:
                 # Multiple directories - rmdir in reverse order
-                return 'rmdir ' + ' '.join(reversed(paths))
-        
+                return "rmdir " + " ".join(reversed(paths))
+
         # touch <path> (creates new file)
-        m = re.match(r'^touch\s+(.+)$', cmd)
+        m = re.match(r"^touch\s+(.+)$", cmd)
         if m:
             path = m.group(1).strip()
-            return f'rm {path}'
-        
+            return f"rm {path}"
+
         # cd <path>
-        m = re.match(r'^cd\s+', cmd)
+        m = re.match(r"^cd\s+", cmd)
         if m:
-            return f'cd {cwd_before}'
-        
+            return f"cd {cwd_before}"
+
         # echo ... > file (redirect to new file)
-        m = re.match(r'^echo\s+.*>\s*([^\s]+)$', cmd)
+        m = re.match(r"^echo\s+.*>\s*([^\s]+)$", cmd)
         if m:
             path = m.group(1).strip()
-            return f'rm {path}'
-        
+            return f"rm {path}"
+
         # echo ... >> file (append - not reversible cleanly)
-        if re.match(r'^echo\s+.*>>', cmd):
+        if re.match(r"^echo\s+.*>>", cmd):
             return None
-        
+
         # cat > file (heredoc style)
-        m = re.match(r'^cat\s*>\s*([^\s]+)', cmd)
+        m = re.match(r"^cat\s*>\s*([^\s]+)", cmd)
         if m:
             path = m.group(1).strip()
-            return f'rm {path}'
-        
+            return f"rm {path}"
+
         # printf ... > file
-        m = re.match(r'^printf\s+.*>\s*([^\s]+)$', cmd)
+        m = re.match(r"^printf\s+.*>\s*([^\s]+)$", cmd)
         if m:
             path = m.group(1).strip()
-            return f'rm {path}'
-        
+            return f"rm {path}"
+
         # Not reversible (rm, mv, cp, chmod, chown, etc.)
-        # These require approval and are intentionally not undoable
+        # These require approval and are intentionally not undoable here.
         return None
 
 
@@ -227,7 +535,7 @@ class CheckpointManager:
     Checkpoints are cleared when a task completes.
     """
 
-    def __init__(self, default_max_retries: int = 3):
+    def __init__(self, default_max_retries: int = 3, max_terminal_checkpoints: int = 5):
         """
         Initialize the checkpoint manager.
         
@@ -238,7 +546,14 @@ class CheckpointManager:
         self._web_stacks: Dict[str, List[WebCheckpoint]] = {}
         self._undo_gen = UndoGenerator()
         self.default_max_retries = default_max_retries
-        logger.info("CheckpointManager initialized")
+        # Maximum number of terminal checkpoints to retain globally.
+        # When capacity is exceeded, the oldest checkpoints are dropped.
+        self.max_terminal_checkpoints = max_terminal_checkpoints
+        logger.info(
+            "CheckpointManager initialized "
+            f"(max_terminal_checkpoints={self.max_terminal_checkpoints}, "
+            f"default_max_retries={self.default_max_retries})"
+        )
 
     # -------------------------------------------------------------------------
     # Terminal Operations
@@ -252,6 +567,10 @@ class CheckpointManager:
         cwd_after: str,
         session_id: str,
         result: Dict[str, Any],
+        *,
+        backup_path: Optional[str] = None,
+        deleted_items: Optional[List[Dict[str, Any]]] = None,
+        is_deletion: bool = False,
     ) -> TerminalCheckpoint:
         """
         Record a terminal command execution.
@@ -276,12 +595,18 @@ class CheckpointManager:
             session_id=session_id,
             result=result,
             undo_command=undo_cmd,
+            backup_path=backup_path,
+            deleted_items=deleted_items or [],
+            is_deletion=is_deletion,
         )
         
         if task_id not in self._terminal_stacks:
             self._terminal_stacks[task_id] = []
         self._terminal_stacks[task_id].append(cp)
-        
+
+        # Enforce global capacity for terminal checkpoints (rolling buffer)
+        self._enforce_terminal_capacity()
+
         logger.info(
             f"[{task_id}] Recorded terminal checkpoint: {command[:50]}... "
             f"(reversible={cp.reversible})"
@@ -289,35 +614,114 @@ class CheckpointManager:
         
         return cp
 
+    def _enforce_terminal_capacity(self) -> None:
+        """
+        Keep only the most recent N terminal checkpoints globally.
+        
+        When the total number of TerminalCheckpoint instances across all tasks
+        exceeds max_terminal_checkpoints, the oldest checkpoints are removed
+        (based on their timestamp), regardless of task_id.
+        """
+        # Collect all checkpoints with task_id and index
+        all_items: List[tuple[str, int, TerminalCheckpoint]] = []
+        for task_id, stack in self._terminal_stacks.items():
+            for idx, cp in enumerate(stack):
+                all_items.append((task_id, idx, cp))
+
+        if len(all_items) <= self.max_terminal_checkpoints:
+            return
+
+        # Sort by timestamp (oldest first)
+        all_items.sort(key=lambda x: x[2].timestamp)
+        to_remove_count = len(all_items) - self.max_terminal_checkpoints
+        to_trim = all_items[:to_remove_count]
+
+        # Group indices by task_id and delete from stacks in reverse index order
+        to_remove_by_task: Dict[str, List[int]] = {}
+        for task_id, idx, _ in to_trim:
+            to_remove_by_task.setdefault(task_id, []).append(idx)
+
+        for task_id, idxs in to_remove_by_task.items():
+            stack = self._terminal_stacks.get(task_id, [])
+            for idx in sorted(set(idxs), reverse=True):
+                if 0 <= idx < len(stack):
+                    removed = stack.pop(idx)
+                    logger.info(
+                        f"[{task_id}] Dropped old terminal checkpoint: "
+                        f"{removed.command[:50]}..."
+                    )
+            if not stack:
+                self._terminal_stacks.pop(task_id, None)
+
     def pop_undo(self, task_id: str) -> Optional[TerminalCheckpoint]:
         """
-        Pop and return the last reversible checkpoint for this task.
+        Pop and return the last undoable checkpoint for this task.
         
-        Non-reversible checkpoints are skipped (removed from stack).
+        A checkpoint is considered undoable if:
+        - It has an undo_command (non-destructive reversible operation), OR
+        - It is marked as a deletion (is_deletion=True) with backup metadata.
+        
+        Other checkpoints are skipped (removed from stack).
         
         Args:
             task_id: The task to undo from
             
         Returns:
-            The checkpoint with undo_command, or None if nothing to undo
+            The checkpoint to undo/restore, or None if nothing to undo
         """
         stack = self._terminal_stacks.get(task_id, [])
         
         while stack:
             cp = stack.pop()
-            if cp.undo_command:
+            if cp.undo_command or (cp.is_deletion and cp.backup_path):
                 logger.info(
                     f"[{task_id}] Popped undo checkpoint: {cp.command[:50]}... "
-                    f"-> {cp.undo_command}"
+                    f"(undo_command={cp.undo_command}, is_deletion={cp.is_deletion})"
                 )
                 return cp
-            else:
-                logger.debug(
-                    f"[{task_id}] Skipped non-reversible: {cp.command[:50]}..."
-                )
+            logger.debug(
+                f"[{task_id}] Skipped non-undoable: {cp.command[:50]}..."
+            )
         
         logger.info(f"[{task_id}] Nothing to undo")
         return None
+
+    def pop_global_undo(self) -> Optional[TerminalCheckpoint]:
+        """
+        Pop and return the most recent undoable checkpoint across ALL tasks.
+        
+        Uses checkpoint timestamps to find the latest undoable operation
+        (either command-based or deletion-based).
+        """
+        latest_cp: Optional[TerminalCheckpoint] = None
+        latest_task_id: Optional[str] = None
+        latest_index: Optional[int] = None
+
+        for task_id, stack in self._terminal_stacks.items():
+            for idx in range(len(stack) - 1, -1, -1):
+                cp = stack[idx]
+                if not (cp.undo_command or (cp.is_deletion and cp.backup_path)):
+                    continue
+                if latest_cp is None or cp.timestamp > latest_cp.timestamp:
+                    latest_cp = cp
+                    latest_task_id = task_id
+                    latest_index = idx
+
+        if latest_cp is None or latest_task_id is None or latest_index is None:
+            logger.info("[global] Nothing to undo across tasks")
+            return None
+
+        # Remove from the originating task stack
+        stack = self._terminal_stacks.get(latest_task_id, [])
+        if 0 <= latest_index < len(stack):
+            stack.pop(latest_index)
+
+        logger.info(
+            f"[global] Popped undo checkpoint from task {latest_task_id}: "
+            f"{latest_cp.command[:50]}... "
+            f"(undo_command={latest_cp.undo_command}, is_deletion={latest_cp.is_deletion})"
+        )
+        return latest_cp
 
     def peek_undo(self, task_id: str) -> Optional[TerminalCheckpoint]:
         """

@@ -4,17 +4,21 @@ Test script for the Checkpoint System
 Tests:
 1. Terminal checkpoints with undo capability
 2. Web checkpoints with auto-retry
+3. Backup manager file roundtrip
+4. Deletion checkpoint undo selection
 """
 import asyncio
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 # Add paths for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "terminal"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "web"))
 
-from common.checkpoint import CheckpointManager, UndoGenerator
+from common.checkpoint import CheckpointManager, UndoGenerator, BackupManager
 
 
 def test_undo_generator():
@@ -164,10 +168,123 @@ def test_checkpoint_manager_web():
     return cp.success and cp.retry_count == 3
 
 
+def test_backup_manager_file_roundtrip():
+    """Test BackupManager backup and restore for a single file"""
+    print("\n" + "=" * 60)
+    print("TEST 4: BackupManager - File Roundtrip")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        src_file = tmp / "original.txt"
+        backup_root = tmp / "backups"
+
+        content = "Hello from backup/restore test!\nLine 2.\n"
+        src_file.write_text(content, encoding="utf-8")
+
+        print(f"\n  Created source file: {src_file}")
+
+        deleted_items = [
+            {
+                "original_arg": "original.txt",
+                "path": str(src_file),
+                "is_dir": False,
+            }
+        ]
+
+        mgr = BackupManager(base_dir=str(backup_root))
+        task_id = "backup_test_task"
+        checkpoint_id = "cp_file_001"
+
+        print("\n  Backing up deleted items...")
+        backup_dir = mgr.backup_deleted_items(
+            task_id=task_id,
+            checkpoint_id=checkpoint_id,
+            deleted_items=deleted_items,
+            command="rm original.txt",
+            cwd_before=str(tmp),
+        )
+        print(f"  Backup directory: {backup_dir}")
+
+        # Simulate deletion
+        src_file.unlink()
+        print(f"  Deleted source file: exists={src_file.exists()}")
+
+        print("\n  Restoring from backup...")
+        restore_result = mgr.restore_from_checkpoint_dir(backup_dir)
+        print(f"  Restore result: {restore_result}")
+
+        file_exists_after = src_file.exists()
+        restored_content = src_file.read_text(encoding="utf-8") if file_exists_after else ""
+
+        print(f"  File exists after restore: {file_exists_after}")
+        print(f"  Restored content matches: {restored_content == content}")
+
+        return (
+            restore_result.get("ok", False)
+            and restore_result.get("restored_count", 0) >= 1
+            and file_exists_after
+            and restored_content == content
+        )
+
+
+def test_deletion_checkpoint_pop_undo():
+    """Test that deletion checkpoints are considered undoable by pop_undo"""
+    print("\n" + "=" * 60)
+    print("TEST 5: CheckpointManager - Deletion Undo Selection")
+    print("=" * 60)
+
+    mgr = CheckpointManager()
+    task_id = "test_task_deletion"
+
+    # Non-undoable checkpoint (rm without backup / not marked as deletion)
+    mgr.record_terminal(
+        task_id=task_id,
+        command="rm no_backup.txt",
+        cwd_before="/tmp",
+        cwd_after="/tmp",
+        session_id="sess_del",
+        result={"ok": True, "exit_code": 0},
+        is_deletion=False,
+    )
+
+    # Deletion checkpoint with backup metadata
+    cp_del = mgr.record_terminal(
+        task_id=task_id,
+        command="rm with_backup.txt",
+        cwd_before="/tmp",
+        cwd_after="/tmp",
+        session_id="sess_del",
+        result={"ok": True, "exit_code": 0},
+        backup_path="/tmp/fake_backup_dir",
+        deleted_items=[
+            {"original_arg": "with_backup.txt", "path": "/tmp/with_backup.txt", "is_dir": False}
+        ],
+        is_deletion=True,
+    )
+
+    popped = mgr.pop_undo(task_id)
+
+    print(f"\n  Popped checkpoint command: {popped.command if popped else None}")
+    print(f"  Is deletion: {popped.is_deletion if popped else None}")
+    print(f"  Has backup_path: {bool(popped.backup_path) if popped else None}")
+
+    # After popping, stack should still have the first non-undoable checkpoint
+    remaining_stack = mgr.get_terminal_stack(task_id)
+    print(f"  Remaining stack size: {len(remaining_stack)}")
+
+    return (
+        popped is not None
+        and popped is cp_del
+        and popped.is_deletion
+        and bool(popped.backup_path)
+    )
+
+
 async def test_terminal_mcp_integration():
     """Test actual MCP integration (requires MCP server running)"""
     print("\n" + "=" * 60)
-    print("TEST 4: Terminal MCP Integration (Live)")
+    print("TEST 6: Terminal MCP Integration (Live)")
     print("=" * 60)
     
     try:
@@ -238,7 +355,7 @@ async def test_terminal_mcp_integration():
 async def test_web_retry_integration():
     """Test web retry integration"""
     print("\n" + "=" * 60)
-    print("TEST 5: Web Retry Integration")
+    print("TEST 7: Web Retry Integration")
     print("=" * 60)
     
     try:
@@ -290,6 +407,8 @@ async def main():
     results["UndoGenerator"] = test_undo_generator()
     results["Terminal Checkpoints"] = test_checkpoint_manager_terminal()
     results["Web Checkpoints"] = test_checkpoint_manager_web()
+    results["Backup File Roundtrip"] = test_backup_manager_file_roundtrip()
+    results["Deletion Checkpoint Undo Selection"] = test_deletion_checkpoint_pop_undo()
     
     # Integration tests (require MCP servers)
     print("\n" + "-" * 60)
