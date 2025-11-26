@@ -14,12 +14,14 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from common.checkpoint import CheckpointManager
+from common.checkpoint import CheckpointManager, DeletionDetector, BackupManager
 
 mcp = FastMCP(name="Terminal MCP Server")
 
-# Global checkpoint manager for undo support
+# Global checkpoint manager and helpers for undo/backup support
 checkpoint_manager = CheckpointManager()
+_deletion_detector = DeletionDetector()
+_backup_manager = BackupManager()
 
 # This is a stronger safety layer that rejects commands that are known to be dangerous.
 HIGH_PATTERNS = [
@@ -263,10 +265,58 @@ def run_command(
     # Get cwd BEFORE execution
     s = manager.sessions.get(session_id)
     cwd_before = s.cwd if s else ""
-    
+
+    # ----------------------------------------------------------------------
+    # Phase 2: detect potential deletions and plan backups BEFORE execution
+    # ----------------------------------------------------------------------
+    deleted_items = []
+    backup_path: Optional[str] = None
+
+    if task_id:
+        try:
+            candidates = _deletion_detector.detect(command, cwd_before)
+            # Refine candidates using the actual filesystem
+            for item in candidates:
+                p = Path(item["path"])
+                if not p.exists():
+                    continue
+                deleted_items.append(
+                    {
+                        "original_arg": item.get("original_arg"),
+                        "path": str(p),
+                        "is_dir": p.is_dir(),
+                    }
+                )
+
+            if deleted_items:
+                # Use a dedicated backup id separate from checkpoint id
+                backup_id = uuid.uuid4().hex[:8]
+                layout = _backup_manager.plan_backup_layout(
+                    task_id=task_id,
+                    checkpoint_id=backup_id,
+                    deleted_items=deleted_items,
+                )
+                backup_path = layout.get("checkpoint_dir")
+
+                # NOTE: We only plan + persist metadata in Phase 2.
+                # Actual content copy/restore will be handled in Phase 3.
+                meta = {
+                    "task_id": task_id,
+                    "backup_id": backup_id,
+                    "command": command,
+                    "cwd_before": cwd_before,
+                    "deleted_items": deleted_items,
+                    "layout": layout,
+                }
+                _backup_manager.write_metadata(task_id, backup_id, meta)
+                # Attach lightweight hint to the result later
+        except Exception as e:
+            # Backup planning failure must never block the actual command
+            logger.warning(f"[checkpoint] Failed to plan backup for '{command}': {e}")
+
     # Execute the command
     result = manager.run_command(session_id, command, timeout_s=timeout_s, approved=approved)
-    
+
     # Record checkpoint if task_id provided and command succeeded
     if task_id and result.get("ok", False):
         cwd_after = result.get("cwd", cwd_before)
@@ -277,13 +327,21 @@ def run_command(
             cwd_after=cwd_after,
             session_id=session_id,
             result=result,
+            backup_path=backup_path,
+            deleted_items=deleted_items,
+            is_deletion=bool(deleted_items),
         )
         # Add checkpoint info to result
         result["checkpoint_id"] = cp.id
         result["reversible"] = cp.reversible
         if cp.undo_command:
             result["undo_command"] = cp.undo_command
-    
+        if backup_path and deleted_items:
+            # Surface minimal backup hint to the caller
+            result.setdefault("backup", {})
+            result["backup"]["path"] = backup_path
+            result["backup"]["item_count"] = len(deleted_items)
+
     return result
 
 @mcp.tool()

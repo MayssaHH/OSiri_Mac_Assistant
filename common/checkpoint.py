@@ -451,6 +451,10 @@ class CheckpointManager:
         cwd_after: str,
         session_id: str,
         result: Dict[str, Any],
+        *,
+        backup_path: Optional[str] = None,
+        deleted_items: Optional[List[Dict[str, Any]]] = None,
+        is_deletion: bool = False,
     ) -> TerminalCheckpoint:
         """
         Record a terminal command execution.
@@ -475,6 +479,9 @@ class CheckpointManager:
             session_id=session_id,
             result=result,
             undo_command=undo_cmd,
+            backup_path=backup_path,
+            deleted_items=deleted_items or [],
+            is_deletion=is_deletion,
         )
         
         if task_id not in self._terminal_stacks:
