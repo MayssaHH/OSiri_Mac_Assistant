@@ -12,7 +12,7 @@
 
 services:
   # ============================================
-  # OSiri Web UI - Gradio Interface
+  # OSiri Web UI - FastAPI Interface
   # ============================================
   ui:
     build:
@@ -46,10 +46,13 @@ services:
       - A2A_BASE_URL=http://orchestrator:9997/
       - TERMINAL_AGENT_URL=http://terminal:9998/
       - WEB_AGENT_URL=http://web:9999/
+      - APP_AGENT_URL=http://app:9996/
     depends_on:
       terminal:
         condition: service_healthy
       web:
+        condition: service_healthy
+      app:
         condition: service_healthy
     networks:
       - osiri-network
@@ -106,6 +109,31 @@ services:
       - ~/Library/Safari:/root/Library/Safari:ro
       # Chrome history (macOS path)
       - ~/Library/Application Support/Google/Chrome:/root/Library/Application Support/Google/Chrome:ro
+    networks:
+      - osiri-network
+    restart: unless-stopped
+
+  # ============================================
+  # App Agent - Slack and Gmail communications
+  # ============================================
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    ports:
+      - "9996:9996"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - A2A_HOST=0.0.0.0
+      - APP_AGENT_PORT=9996
+      - APP_AGENT_URL=http://app:9996/
+      # Slack credentials
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      # Gmail OAuth token is mounted via volume (generated via test_gmail.py)
+    volumes:
+      # Mount Gmail OAuth token (read-only)
+      - ./app/maf_agent/token.json:/app/token.json:ro
+      - ./app/maf_agent/credentials.json:/app/credentials.json:ro
     networks:
       - osiri-network
     restart: unless-stopped

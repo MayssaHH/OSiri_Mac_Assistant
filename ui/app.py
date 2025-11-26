@@ -512,6 +512,58 @@ HTML_TEMPLATE = '''
             color: var(--text-primary);
         }
         
+        /* Approval buttons */
+        .approval-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 14px;
+        }
+        
+        .approve-btn {
+            flex: 1;
+            background: linear-gradient(135deg, #34d399 0%, #059669 100%);
+            border: none;
+            border-radius: var(--radius-sm);
+            padding: 12px 20px;
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .approve-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(52, 211, 153, 0.4);
+        }
+        
+        .approve-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+        
+        .reject-btn {
+            flex: 1;
+            background: rgba(248, 113, 113, 0.2);
+            border: 1px solid rgba(248, 113, 113, 0.4);
+            border-radius: var(--radius-sm);
+            padding: 12px 20px;
+            color: var(--error);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .reject-btn:hover {
+            background: rgba(248, 113, 113, 0.3);
+        }
+        
         /* Input area */
         .input-area {
             padding: 20px;
@@ -896,6 +948,18 @@ HTML_TEMPLATE = '''
             sendMessage();
         }
         
+        async function sendApproval() {
+            // Send "approve" command
+            document.getElementById('message-input').value = 'approve';
+            await sendMessage();
+        }
+        
+        function rejectAction() {
+            // Add a message indicating cancellation
+            addMessage("I'll skip this action.", 'user');
+            addMessage("No problem! What else would you like me to help with?", 'assistant');
+        }
+        
         async function sendMessage() {
             const input = document.getElementById('message-input');
             const message = input.value.trim();
@@ -966,7 +1030,12 @@ HTML_TEMPLATE = '''
                 contentHtml = `
                     <div>This action requires your approval:</div>
                     <div class="approval-card">
-                        <h4>Approval Required</h4>
+                        <h4>
+                            <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: var(--warning);">
+                                <path d="M12 2L1 21h22L12 2zm0 3.99L19.53 19H4.47L12 5.99zM13 16h-2v2h2v-2zm0-6h-2v4h2v-4z"/>
+                            </svg>
+                            Approval Required
+                        </h4>
                         <div class="approval-detail">
                             <span class="label">Agent:</span>
                             <span class="value">${c.agent}</span>
@@ -975,9 +1044,13 @@ HTML_TEMPLATE = '''
                             <span class="label">Task:</span>
                             <span class="value">${c.task}</span>
                         </div>
-                    </div>
-                    <div style="margin-top: 12px; color: var(--text-secondary);">
-                        Type <strong>"approve"</strong> to proceed or rephrase your request.
+                        <div class="approval-buttons">
+                            <button class="approve-btn" onclick="sendApproval()">
+                                <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                                Approve
+                            </button>
+                            <button class="reject-btn" onclick="rejectAction()">Cancel</button>
+                        </div>
                     </div>
                 `;
             } else {

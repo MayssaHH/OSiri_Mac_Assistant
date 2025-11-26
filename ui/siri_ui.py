@@ -94,7 +94,10 @@ def format_response(response: dict) -> dict:
         pending = response.get("pending_subtask", {})
         return {
             "type": "approval",
-            "content": f"Approval needed for {pending.get('agent', 'action')}: {pending.get('task', '')}. Say 'approve' to continue.",
+            "content": {
+                "agent": pending.get("agent", "action"),
+                "task": pending.get("task", "")
+            },
             "ok": False
         }
     
@@ -261,6 +264,80 @@ SIRI_HTML = '''
             border-color: rgba(245, 158, 11, 0.3);
         }
         
+        /* Approval styling - sleek inline buttons */
+        .approval-content {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        
+        .approval-text {
+            flex: 1;
+            min-width: 200px;
+        }
+        
+        .approval-label {
+            color: rgba(255, 180, 100, 0.9);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+        
+        .approval-task {
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 13px;
+        }
+        
+        .approval-buttons {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .approve-btn {
+            background: linear-gradient(135deg, rgba(255, 107, 157, 0.9) 0%, rgba(196, 69, 105, 0.9) 100%);
+            border: none;
+            border-radius: 16px;
+            padding: 6px 14px;
+            color: white;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .approve-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 2px 12px rgba(255, 107, 157, 0.4);
+        }
+        
+        .approve-btn svg {
+            width: 12px;
+            height: 12px;
+            fill: currentColor;
+        }
+        
+        .reject-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 16px;
+            padding: 6px 12px;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 12px;
+            font-weight: 400;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .reject-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+            color: rgba(255, 255, 255, 0.9);
+        }
+        
         @keyframes slideUp {
             from {
                 opacity: 0;
@@ -277,6 +354,8 @@ SIRI_HTML = '''
             width: 100%;
             max-width: 600px;
             position: relative;
+            display: flex;
+            justify-content: center;
         }
         
         .input-bar {
@@ -298,6 +377,35 @@ SIRI_HTML = '''
                 inset 0 1px 0 rgba(255, 255, 255, 0.15),
                 inset 0 -1px 0 rgba(0, 0, 0, 0.2);
             border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            overflow: hidden;
+        }
+        
+        /* Collapsed state - just the circle */
+        .input-bar.collapsed {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            padding: 0;
+            cursor: pointer;
+        }
+        
+        .input-bar.collapsed .input-inner {
+            padding: 8px;
+            gap: 0;
+        }
+        
+        .input-bar.collapsed #input,
+        .input-bar.collapsed .send-btn {
+            opacity: 0;
+            width: 0;
+            padding: 0;
+            pointer-events: none;
+        }
+        
+        .input-bar.collapsed .osiri-icon {
+            width: 32px;
+            height: 32px;
         }
         
         .input-inner {
@@ -305,6 +413,7 @@ SIRI_HTML = '''
             align-items: center;
             gap: 12px;
             padding: 8px 16px;
+            transition: all 0.3s ease;
         }
         
         .osiri-icon {
@@ -317,12 +426,24 @@ SIRI_HTML = '''
             justify-content: center;
             flex-shrink: 0;
             box-shadow: 0 2px 8px rgba(196, 69, 105, 0.4);
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .osiri-icon:hover {
+            transform: scale(1.1);
+            box-shadow: 0 4px 16px rgba(255, 107, 157, 0.5);
         }
         
         .osiri-icon svg {
             width: 18px;
             height: 18px;
             fill: white;
+            transition: transform 0.3s ease;
+        }
+        
+        .input-bar.collapsed .osiri-icon:hover svg {
+            transform: scale(1.1);
         }
         
         #input {
@@ -334,6 +455,8 @@ SIRI_HTML = '''
             font-size: 17px;
             font-weight: 400;
             letter-spacing: -0.2px;
+            min-width: 0;
+            transition: all 0.3s ease;
         }
         
         #input::placeholder {
@@ -350,8 +473,9 @@ SIRI_HTML = '''
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: all 0.2s ease;
+            transition: all 0.3s ease;
             opacity: 0.7;
+            flex-shrink: 0;
         }
         
         .send-btn:hover {
@@ -592,34 +716,82 @@ SIRI_HTML = '''
             div.className = `response ${data.type || ''}`;
             
             let content = data.content;
-            if (typeof content !== 'string') {
-                content = JSON.stringify(content, null, 2);
+            let shouldAutoFade = true;
+            
+            // Handle approval type with buttons
+            if (data.type === 'approval' && typeof content === 'object') {
+                div.innerHTML = `
+                    <div class="approval-content">
+                        <div class="approval-label">⚠️ Approval Required</div>
+                        <div class="approval-task"><strong>${content.agent}</strong>: ${content.task}</div>
+                    </div>
+                    <div class="approval-buttons">
+                        <button class="approve-btn" onclick="sendApproval(this)">
+                            <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                            Approve
+                        </button>
+                        <button class="reject-btn" onclick="rejectAction(this)">Cancel</button>
+                    </div>
+                `;
+                shouldAutoFade = false; // Don't auto-fade approval messages
+            } else {
+                if (typeof content !== 'string') {
+                    content = JSON.stringify(content, null, 2);
+                }
+                
+                // Simple formatting
+                content = content
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/\\n/g, '<br>')
+                    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+                
+                div.innerHTML = content;
             }
             
-            // Simple formatting
-            content = content
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/\\n/g, '<br>')
-                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-            
-            div.innerHTML = content;
             container.appendChild(div);
             
             // Scroll to bottom
             container.scrollTop = container.scrollHeight;
             
-            // Auto-fade after delay
-            setTimeout(() => {
-                div.classList.add('fading');
+            // Auto-fade after delay (only for non-approval messages)
+            if (shouldAutoFade) {
                 setTimeout(() => {
-                    div.remove();
-                    // Show suggestions again if no responses left
-                    if (container.children.length === 0) {
-                        document.getElementById('suggestions').style.display = 'flex';
-                    }
-                }, 500);
-            }, FADE_DELAY);
+                    div.classList.add('fading');
+                    setTimeout(() => {
+                        div.remove();
+                        // Show suggestions again if no responses left
+                        if (container.children.length === 0) {
+                            document.getElementById('suggestions').style.display = 'flex';
+                        }
+                    }, 500);
+                }, FADE_DELAY);
+            }
+        }
+        
+        async function sendApproval(btn) {
+            // Disable buttons
+            const parent = btn.closest('.response');
+            const buttons = parent.querySelectorAll('button');
+            buttons.forEach(b => b.disabled = true);
+            btn.textContent = 'Approving...';
+            
+            // Remove the approval message
+            parent.classList.add('fading');
+            setTimeout(() => parent.remove(), 500);
+            
+            // Send approval
+            document.getElementById('input').value = 'approve';
+            await sendMessage();
+        }
+        
+        function rejectAction(btn) {
+            const parent = btn.closest('.response');
+            parent.classList.add('fading');
+            setTimeout(() => {
+                parent.remove();
+                showResponse({ type: 'info', content: 'Action cancelled.' });
+            }, 500);
         }
         
         // Focus input on load

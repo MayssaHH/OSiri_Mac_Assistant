@@ -48,21 +48,12 @@ def build_agent_card(base_url: str) -> AgentCard:
 
 
 def main():
+    # Host to bind to (0.0.0.0 for Docker, 127.0.0.1 for local)
     host = os.getenv("A2A_HOST", "127.0.0.1")
-    # Use APP_AGENT_URL if set, otherwise construct from port
-    base_url = os.getenv("APP_AGENT_URL")
-    if base_url:
-        # Extract port from URL if provided
-        try:
-            from urllib.parse import urlparse
-            parsed = urlparse(base_url)
-            port = parsed.port or int(os.getenv("APP_AGENT_PORT"))
-            host = parsed.hostname or host
-        except Exception:
-            port = int(os.getenv("APP_AGENT_PORT"))
-    else:
-        port = int(os.getenv("APP_AGENT_PORT"))
-        base_url = f"http://{host}:{port}"
+    port = int(os.getenv("APP_AGENT_PORT", "9996"))
+    
+    # URL for the agent card (how other services reach us)
+    base_url = os.getenv("APP_AGENT_URL", f"http://{host}:{port}/")
 
     agent_card = build_agent_card(base_url)
 
