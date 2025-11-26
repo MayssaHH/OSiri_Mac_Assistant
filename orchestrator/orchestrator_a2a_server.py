@@ -28,17 +28,18 @@ def build_agent_card(base_url: str) -> AgentCard:
     skill = AgentSkill(
         id="orchestrate",
         name="Mesh Orchestrator",
-        description="Routes user tasks to specialist A2A agents (terminal, web).",
+        description="Routes user tasks to specialist A2A agents (terminal, web, app).",
         tags=["orchestrator", "routing", "mesh"],
         examples=[
             "Create a folder and a hello.py file on Desktop",
-            "Search the web for the latest paper about KAN kernels"
+            "Search the web for the latest paper about KAN kernels",
+            "Check my emails and summarize them"
         ],
     )
 
     return AgentCard(
         name="Osiri Orchestrator",
-        description="Top-level A2A orchestrator that delegates tasks to other agents.",
+        description="Top-level A2A orchestrator that delegates tasks to specialist agents: terminal (local operations), web (browsing/searching/caching), and app (Slack/Gmail communications).",
         url=base_url,
         version="0.1.0",
         default_input_modes=["text"],
