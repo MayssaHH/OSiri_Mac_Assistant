@@ -31,9 +31,13 @@ Usage:
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+from pathlib import Path
 import uuid
 import re
 import logging
+import os
+import json
+import shutil
 
 logger = logging.getLogger("checkpoint")
 
@@ -66,6 +70,16 @@ class TerminalCheckpoint:
     result: Dict[str, Any] = field(default_factory=dict)
     undo_command: Optional[str] = None
 
+    # Deletion/back-up metadata (Phase 1 – not yet wired into run_command/undo)
+    #
+    # When we later support reversible deletions, these fields will hold:
+    # - backup_path: directory where backups for this checkpoint are stored
+    # - deleted_items: list of deleted filesystem objects with metadata
+    # - is_deletion: flag indicating this command deleted something
+    backup_path: Optional[str] = None
+    deleted_items: List[Dict[str, Any]] = field(default_factory=list)
+    is_deletion: bool = False
+
     @property
     def reversible(self) -> bool:
         """Returns True if this command can be undone"""
@@ -83,6 +97,9 @@ class TerminalCheckpoint:
             "result": self.result,
             "undo_command": self.undo_command,
             "reversible": self.reversible,
+            "backup_path": self.backup_path,
+            "deleted_items": self.deleted_items,
+            "is_deletion": self.is_deletion,
         }
 
 
@@ -133,83 +150,265 @@ class WebCheckpoint:
 
 
 # ============================================================================
+# Deletion Detection & Backup (Phase 1 infrastructure)
+# ============================================================================
+
+
+class DeletionDetector:
+    """
+    Detects deletion-style shell commands and extracts their targets.
+
+    This is *syntax-level* detection only. It does not touch the filesystem.
+
+    Supported patterns (initial set):
+    - rm <path>...
+    - rm -r|-rf|-f <path>...
+    - rmdir <path>...
+
+    Returned format (per item):
+        {
+            "original_arg": "<as in command>",
+            "path": "/abs/path",
+            "is_dir": bool,
+        }
+    """
+
+    _RM_RE = re.compile(r"^rm\s+(.+)$")
+    _RMDIR_RE = re.compile(r"^rmdir\s+(.+)$")
+
+    def _split_args(self, arg_str: str) -> List[str]:
+        """
+        Very small arg splitter. We keep this conservative (no full shell parsing).
+        """
+        return [p for p in arg_str.strip().split() if p]
+
+    def _normalize_path(self, raw: str, cwd_before: str) -> str:
+        """
+        Convert a raw path argument to an absolute normalized path.
+        """
+        # Expand user (~) and env vars
+        expanded = os.path.expanduser(os.path.expandvars(raw))
+        p = Path(expanded)
+        if not p.is_absolute():
+            p = Path(cwd_before) / p
+        return str(p.resolve())
+
+    def detect(self, command: str, cwd_before: str) -> List[Dict[str, Any]]:
+        """
+        Detect deletion targets for a command.
+
+        Returns a list of target dicts. Empty list means "not a deletion"
+        (or nothing we can confidently reason about).
+        """
+        cmd = command.strip()
+        targets: List[Dict[str, Any]] = []
+
+        # rm ...
+        m = self._RM_RE.match(cmd)
+        if m:
+            raw_args = self._split_args(m.group(1))
+            # Strip leading flags (-r, -rf, -f, etc.)
+            path_args = [a for a in raw_args if not a.startswith("-")]
+            for arg in path_args:
+                abs_path = self._normalize_path(arg, cwd_before)
+                targets.append(
+                    {
+                        "original_arg": arg,
+                        "path": abs_path,
+                        # We don't hit the filesystem here; caller can refine
+                        "is_dir": abs_path.endswith(os.sep),
+                    }
+                )
+            return targets
+
+        # rmdir ...
+        m = self._RMDIR_RE.match(cmd)
+        if m:
+            raw_args = self._split_args(m.group(1))
+            for arg in raw_args:
+                abs_path = self._normalize_path(arg, cwd_before)
+                targets.append(
+                    {
+                        "original_arg": arg,
+                        "path": abs_path,
+                        "is_dir": True,
+                    }
+                )
+            return targets
+
+        return targets
+
+
+class BackupManager:
+    """
+    Manages filesystem backups for potentially destructive terminal commands.
+
+    Phase 1: defines structure and helpers, *without* being wired into
+    run_command/undo yet.
+
+    Backup layout (per task/checkpoint):
+        base_dir/
+          {task_id}/
+            {checkpoint_id}/
+              metadata.json
+              data/
+                item_00001
+                item_00002
+
+    The actual content format (file vs directory tarball, etc.) is left flexible
+    for later phases.
+    """
+
+    def __init__(self, base_dir: Optional[str] = None):
+        self.base_dir = Path(
+            base_dir or os.path.join(os.path.expanduser("~"), ".checkpoint_backups")
+        )
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"BackupManager initialized at {self.base_dir}")
+
+    # ----- Path helpers -----------------------------------------------------
+
+    def task_checkpoint_dir(self, task_id: str, checkpoint_id: str) -> Path:
+        """
+        Directory that will hold backups for a specific checkpoint.
+        """
+        return self.base_dir / task_id / checkpoint_id
+
+    def metadata_path(self, task_id: str, checkpoint_id: str) -> Path:
+        return self.task_checkpoint_dir(task_id, checkpoint_id) / "metadata.json"
+
+    def data_dir(self, task_id: str, checkpoint_id: str) -> Path:
+        return self.task_checkpoint_dir(task_id, checkpoint_id) / "data"
+
+    # ----- Planning (no I/O guarantees yet) ---------------------------------
+
+    def plan_backup_layout(
+        self,
+        task_id: str,
+        checkpoint_id: str,
+        deleted_items: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Compute where backups *would* be stored for a given deletion checkpoint.
+
+        This is a pure helper that does not touch the filesystem directly
+        (aside from ensuring parent dirs exist).
+        """
+        cp_dir = self.task_checkpoint_dir(task_id, checkpoint_id)
+        data_dir = self.data_dir(task_id, checkpoint_id)
+        cp_dir.mkdir(parents=True, exist_ok=True)
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        layout: Dict[str, Any] = {
+            "checkpoint_dir": str(cp_dir),
+            "data_dir": str(data_dir),
+            "items": [],
+        }
+
+        for idx, item in enumerate(deleted_items, start=1):
+            item_id = f"item_{idx:05d}"
+            layout["items"].append(
+                {
+                    "item_id": item_id,
+                    "original_path": item.get("path"),
+                    "original_arg": item.get("original_arg"),
+                    "is_dir": bool(item.get("is_dir")),
+                    "backup_path": str(data_dir / item_id),
+                }
+            )
+
+        return layout
+
+    def write_metadata(
+        self,
+        task_id: str,
+        checkpoint_id: str,
+        meta: Dict[str, Any],
+    ) -> None:
+        """
+        Persist backup metadata to disk for later inspection/restore.
+        """
+        meta_path = self.metadata_path(task_id, checkpoint_id)
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        with meta_path.open("w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+
+
+# ============================================================================
 # Undo Command Generator
 # ============================================================================
 
+
 class UndoGenerator:
     """
-    Generates undo commands for reversible shell operations.
-    
-    Supported operations:
-    - mkdir -> rmdir
-    - touch -> rm (for new files)
-    - cd -> cd back to previous directory
-    - echo/cat > file -> rm (for new files)
-    
-    Destructive operations (rm, mv, cp) are NOT reversible - they require
-    user approval and thus don't need undo support.
+    Generates undo commands for reversible *non-destructive* shell operations.
+
+    NOTE: Destructive operations (rm, mv, cp, chmod, chown, etc.) remain
+    non-reversible at the command level. Deletion undo will instead be
+    implemented via backups handled by BackupManager, not by synthesizing
+    shell commands here.
     """
 
     def generate(self, command: str, cwd_before: str) -> Optional[str]:
         """
         Generate an undo command for the given shell command.
-        
+
         Args:
             command: The shell command that was executed
             cwd_before: The working directory before execution
-            
+
         Returns:
             The undo command string, or None if not reversible
         """
         cmd = command.strip()
-        
+
         # mkdir [-p] <path>
-        m = re.match(r'^mkdir\s+(?:-p\s+)?(.+)$', cmd)
+        m = re.match(r"^mkdir\s+(?:-p\s+)?(.+)$", cmd)
         if m:
             path = m.group(1).strip()
             # Handle multiple paths
             paths = path.split()
             if len(paths) == 1:
-                return f'rmdir {path}'
+                return f"rmdir {path}"
             else:
                 # Multiple directories - rmdir in reverse order
-                return 'rmdir ' + ' '.join(reversed(paths))
-        
+                return "rmdir " + " ".join(reversed(paths))
+
         # touch <path> (creates new file)
-        m = re.match(r'^touch\s+(.+)$', cmd)
+        m = re.match(r"^touch\s+(.+)$", cmd)
         if m:
             path = m.group(1).strip()
-            return f'rm {path}'
-        
+            return f"rm {path}"
+
         # cd <path>
-        m = re.match(r'^cd\s+', cmd)
+        m = re.match(r"^cd\s+", cmd)
         if m:
-            return f'cd {cwd_before}'
-        
+            return f"cd {cwd_before}"
+
         # echo ... > file (redirect to new file)
-        m = re.match(r'^echo\s+.*>\s*([^\s]+)$', cmd)
+        m = re.match(r"^echo\s+.*>\s*([^\s]+)$", cmd)
         if m:
             path = m.group(1).strip()
-            return f'rm {path}'
-        
+            return f"rm {path}"
+
         # echo ... >> file (append - not reversible cleanly)
-        if re.match(r'^echo\s+.*>>', cmd):
+        if re.match(r"^echo\s+.*>>", cmd):
             return None
-        
+
         # cat > file (heredoc style)
-        m = re.match(r'^cat\s*>\s*([^\s]+)', cmd)
+        m = re.match(r"^cat\s*>\s*([^\s]+)", cmd)
         if m:
             path = m.group(1).strip()
-            return f'rm {path}'
-        
+            return f"rm {path}"
+
         # printf ... > file
-        m = re.match(r'^printf\s+.*>\s*([^\s]+)$', cmd)
+        m = re.match(r"^printf\s+.*>\s*([^\s]+)$", cmd)
         if m:
             path = m.group(1).strip()
-            return f'rm {path}'
-        
+            return f"rm {path}"
+
         # Not reversible (rm, mv, cp, chmod, chown, etc.)
-        # These require approval and are intentionally not undoable
+        # These require approval and are intentionally not undoable here.
         return None
 
 
