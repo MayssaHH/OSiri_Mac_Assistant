@@ -495,6 +495,63 @@ SIRI_HTML = '''
             fill: white;
         }
         
+        /* Mic button */
+        .mic-btn {
+            width: 36px;
+            height: 36px;
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            opacity: 0.7;
+            flex-shrink: 0;
+            position: relative;
+        }
+        
+        .mic-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            opacity: 1;
+        }
+        
+        .mic-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: white;
+            transition: all 0.2s ease;
+        }
+        
+        /* Recording state */
+        .mic-btn.recording {
+            background: linear-gradient(135deg, #ff6b9d 0%, #c44569 100%);
+            opacity: 1;
+            animation: micPulse 1.5s ease-in-out infinite;
+        }
+        
+        .mic-btn.recording svg {
+            fill: white;
+        }
+        
+        @keyframes micPulse {
+            0%, 100% {
+                box-shadow: 0 0 0 0 rgba(255, 107, 157, 0.4);
+            }
+            50% {
+                box-shadow: 0 0 0 12px rgba(255, 107, 157, 0);
+            }
+        }
+        
+        /* Hide mic in collapsed state */
+        .input-bar.collapsed .mic-btn {
+            opacity: 0;
+            width: 0;
+            padding: 0;
+            pointer-events: none;
+        }
+        
         /* Loading state */
         .input-bar.loading {
             animation: pulse 1.5s ease-in-out infinite;
@@ -649,6 +706,11 @@ SIRI_HTML = '''
                     onkeydown="handleKey(event)"
                     autocomplete="off"
                 >
+                <button class="mic-btn" id="micBtn" onclick="toggleMic()" title="Click to speak">
+                    <svg viewBox="0 0 24 24">
+                        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                    </svg>
+                </button>
                 <button class="send-btn" id="sendBtn" onclick="sendMessage()">
                     <svg viewBox="0 0 24 24">
                         <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
@@ -663,6 +725,132 @@ SIRI_HTML = '''
         let isProcessing = false;
         let isCollapsed = false;
         const FADE_DELAY = 8000; // Response fades after 8 seconds
+        
+        // ========== Speech Recognition Setup ==========
+        let recognition = null;
+        let isRecording = false;
+        let silenceTimer = null;
+        let finalTranscriptBase = ''; // Stores confirmed final text
+        const SILENCE_TIMEOUT = 4000; // 4 seconds of silence to auto-stop
+        
+        // Initialize speech recognition
+        function initSpeechRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                console.warn('Speech recognition not supported');
+                document.getElementById('micBtn').style.display = 'none';
+                return null;
+            }
+            
+            const rec = new SpeechRecognition();
+            rec.continuous = true;
+            rec.interimResults = true;
+            rec.lang = 'en-US';
+            
+            rec.onstart = () => {
+                isRecording = true;
+                finalTranscriptBase = document.getElementById('input').value.trim();
+                document.getElementById('micBtn').classList.add('recording');
+                document.getElementById('input').placeholder = 'Listening...';
+                resetSilenceTimer();
+            };
+            
+            rec.onend = () => {
+                isRecording = false;
+                document.getElementById('micBtn').classList.remove('recording');
+                document.getElementById('input').placeholder = 'Ask OSiri anything...';
+                clearTimeout(silenceTimer);
+            };
+            
+            rec.onresult = (event) => {
+                resetSilenceTimer();
+                
+                // Build complete transcript from all results
+                let fullFinal = '';
+                let currentInterim = '';
+                
+                for (let i = 0; i < event.results.length; i++) {
+                    if (event.results[i].isFinal) {
+                        fullFinal += event.results[i][0].transcript;
+                    } else {
+                        currentInterim += event.results[i][0].transcript;
+                    }
+                }
+                
+                const input = document.getElementById('input');
+                // Combine: original text + final results + current interim
+                let displayText = finalTranscriptBase;
+                if (fullFinal) {
+                    displayText = (displayText + ' ' + fullFinal).trim();
+                }
+                if (currentInterim) {
+                    displayText = (displayText + ' ' + currentInterim).trim() + '...';
+                }
+                input.value = displayText;
+            };
+            
+            rec.onerror = (event) => {
+                console.error('Speech recognition error:', event.error);
+                stopRecording();
+                if (event.error === 'not-allowed') {
+                    showResponse({ type: 'error', content: 'Microphone access denied. Please allow microphone access.' });
+                }
+            };
+            
+            return rec;
+        }
+        
+        function resetSilenceTimer() {
+            clearTimeout(silenceTimer);
+            silenceTimer = setTimeout(() => {
+                if (isRecording) {
+                    stopRecording();
+                }
+            }, SILENCE_TIMEOUT);
+        }
+        
+        function toggleMic() {
+            if (isCollapsed) return;
+            
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        }
+        
+        function startRecording() {
+            if (!recognition) {
+                recognition = initSpeechRecognition();
+            }
+            if (recognition && !isRecording) {
+                // Clean up any trailing "..." before starting
+                const input = document.getElementById('input');
+                if (input.value.endsWith('...')) {
+                    input.value = input.value.slice(0, -3).trim();
+                }
+                try {
+                    recognition.start();
+                } catch (e) {
+                    console.error('Failed to start recognition:', e);
+                }
+            }
+        }
+        
+        function stopRecording() {
+            if (recognition && isRecording) {
+                recognition.stop();
+                // Clean up any trailing "..." from interim results
+                const input = document.getElementById('input');
+                if (input.value.endsWith('...')) {
+                    input.value = input.value.slice(0, -3).trim();
+                }
+            }
+        }
+        
+        // Initialize on load
+        recognition = initSpeechRecognition();
+        // ========== End Speech Recognition ==========
         
         function toggleBar(e) {
             e.stopPropagation();

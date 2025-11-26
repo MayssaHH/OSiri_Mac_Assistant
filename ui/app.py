@@ -632,6 +632,57 @@ HTML_TEMPLATE = '''
             fill: white;
         }
         
+        /* Mic button */
+        .mic-btn {
+            width: 52px;
+            height: 52px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+        }
+        
+        .mic-btn:hover {
+            background: var(--bg-elevated);
+            border-color: var(--border-hover);
+        }
+        
+        .mic-btn svg {
+            width: 22px;
+            height: 22px;
+            fill: var(--text-secondary);
+            transition: all 0.2s ease;
+        }
+        
+        .mic-btn:hover svg {
+            fill: var(--text-primary);
+        }
+        
+        /* Recording state */
+        .mic-btn.recording {
+            background: var(--accent-gradient);
+            border-color: transparent;
+            animation: micPulse 1.5s ease-in-out infinite;
+        }
+        
+        .mic-btn.recording svg {
+            fill: white;
+        }
+        
+        @keyframes micPulse {
+            0%, 100% {
+                box-shadow: 0 0 0 0 rgba(255, 107, 157, 0.4);
+            }
+            50% {
+                box-shadow: 0 0 0 12px rgba(255, 107, 157, 0);
+            }
+        }
+        
         /* Typing indicator */
         .typing-indicator {
             display: none;
@@ -907,6 +958,11 @@ HTML_TEMPLATE = '''
                             oninput="autoResize(this)"
                         ></textarea>
                     </div>
+                    <button class="mic-btn" id="mic-btn" onclick="toggleMic()" title="Click to speak">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                        </svg>
+                    </button>
                     <button class="send-btn" id="send-btn" onclick="sendMessage()">
                         <svg viewBox="0 0 24 24">
                             <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
@@ -925,6 +981,130 @@ HTML_TEMPLATE = '''
     <script>
         const sessionId = 'session_' + Math.random().toString(36).substr(2, 9);
         let isProcessing = false;
+        
+        // ========== Speech Recognition Setup ==========
+        let recognition = null;
+        let isRecording = false;
+        let silenceTimer = null;
+        let finalTranscriptBase = ''; // Stores confirmed final text
+        const SILENCE_TIMEOUT = 4000; // 4 seconds of silence to auto-stop
+        
+        function initSpeechRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                console.warn('Speech recognition not supported');
+                const micBtn = document.getElementById('mic-btn');
+                if (micBtn) micBtn.style.display = 'none';
+                return null;
+            }
+            
+            const rec = new SpeechRecognition();
+            rec.continuous = true;
+            rec.interimResults = true;
+            rec.lang = 'en-US';
+            
+            rec.onstart = () => {
+                isRecording = true;
+                finalTranscriptBase = document.getElementById('message-input').value.trim();
+                document.getElementById('mic-btn').classList.add('recording');
+                document.getElementById('message-input').placeholder = 'Listening...';
+                resetSilenceTimer();
+            };
+            
+            rec.onend = () => {
+                isRecording = false;
+                document.getElementById('mic-btn').classList.remove('recording');
+                document.getElementById('message-input').placeholder = 'Ask me anything...';
+                clearTimeout(silenceTimer);
+            };
+            
+            rec.onresult = (event) => {
+                resetSilenceTimer();
+                
+                // Build complete transcript from all results
+                let fullFinal = '';
+                let currentInterim = '';
+                
+                for (let i = 0; i < event.results.length; i++) {
+                    if (event.results[i].isFinal) {
+                        fullFinal += event.results[i][0].transcript;
+                    } else {
+                        currentInterim += event.results[i][0].transcript;
+                    }
+                }
+                
+                const input = document.getElementById('message-input');
+                // Combine: original text + final results + current interim
+                let displayText = finalTranscriptBase;
+                if (fullFinal) {
+                    displayText = (displayText + ' ' + fullFinal).trim();
+                }
+                if (currentInterim) {
+                    displayText = (displayText + ' ' + currentInterim).trim() + '...';
+                }
+                input.value = displayText;
+                autoResize(input);
+            };
+            
+            rec.onerror = (event) => {
+                console.error('Speech recognition error:', event.error);
+                stopRecording();
+                if (event.error === 'not-allowed') {
+                    addMessage('Microphone access denied. Please allow microphone access in your browser settings.', 'assistant');
+                }
+            };
+            
+            return rec;
+        }
+        
+        function resetSilenceTimer() {
+            clearTimeout(silenceTimer);
+            silenceTimer = setTimeout(() => {
+                if (isRecording) {
+                    stopRecording();
+                }
+            }, SILENCE_TIMEOUT);
+        }
+        
+        function toggleMic() {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        }
+        
+        function startRecording() {
+            if (!recognition) {
+                recognition = initSpeechRecognition();
+            }
+            if (recognition && !isRecording) {
+                const input = document.getElementById('message-input');
+                if (input.value.endsWith('...')) {
+                    input.value = input.value.slice(0, -3).trim();
+                }
+                try {
+                    recognition.start();
+                } catch (e) {
+                    console.error('Failed to start recognition:', e);
+                }
+            }
+        }
+        
+        function stopRecording() {
+            if (recognition && isRecording) {
+                recognition.stop();
+                const input = document.getElementById('message-input');
+                if (input.value.endsWith('...')) {
+                    input.value = input.value.slice(0, -3).trim();
+                }
+                autoResize(input);
+            }
+        }
+        
+        // Initialize on load
+        recognition = initSpeechRecognition();
+        // ========== End Speech Recognition ==========
         
         function autoResize(textarea) {
             textarea.style.height = 'auto';
