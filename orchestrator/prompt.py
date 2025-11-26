@@ -6,6 +6,7 @@ Your job: decide which specialist agent should handle the user task.
 Available agents:
 - "terminal": tasks that require running local shell commands, file ops, python envs, git, docker, OS actions.
 - "web": tasks that require browsing/searching/reading online content or interacting with web pages.
+- "app": tasks that require Slack and Gmail communications end-to-end.
 
 Return STRICT JSON ONLY (no extra text). Schema:
 {
@@ -36,6 +37,14 @@ def get_planner_system_prompt() -> str:
       - Can run local shell/file/python/git actions end-to-end (anything that can be done using the terminal)
       - So: any local-only bundle should be ONE subtask.
 
+    3) app agent ("app"):
+      - Has its OWN planner+executor.
+      - Handles Slack and Gmail communications end-to-end:
+        * Send/read Slack messages to channels
+        * Send/read emails via Gmail
+        * Can combine multiple communication actions (e.g., read emails and send Slack summary)
+      - So: any communication-only bundle should be ONE subtask.
+
     Planning rules:
     - DO NOT split a task into multiple subtasks if the SAME agent can do it internally.
     - If a later subtask needs something from an earlier one, reference it with {output_key}.
@@ -47,7 +56,7 @@ def get_planner_system_prompt() -> str:
       "subtasks": [
         {
           "id": "s1",
-          "agent": "web" or "terminal",
+          "agent": "web" or "terminal" or "app",
           "task": "<what to ask that agent to do end-to-end>",
           "output_key": "<short key for the result>"
         }
