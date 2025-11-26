@@ -21,7 +21,7 @@ from a2a.utils.parts import get_data_parts
 from terminal_mcp.terminal_agent import build_planner_agent, build_executor_agent
 from terminal_mcp.terminal_mcp_server import classify_risk
 from terminal_mcp.terminal_client import (
-    set_current_task_id,
+    set_current_task_id, 
     clear_task_checkpoints,
     open_shell,
     undo_last,
