@@ -36,7 +36,7 @@ def get_service():
             # CHANGE: Look in maf_agent/oauth_credentials.json if credentials.json is not in root
             creds_file = "credentials.json"
             if not os.path.exists(creds_file):
-                creds_file = "maf_agent/oauth_credentials.json"
+                creds_file = "app/maf_agent/oauth_credentials.json"
 
             if not os.path.exists(creds_file):
                 print(f"[ERROR] '{creds_file}' not found.")
