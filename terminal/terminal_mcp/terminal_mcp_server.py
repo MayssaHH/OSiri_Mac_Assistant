@@ -378,6 +378,11 @@ def undo_last(task_id: str, session_id: str) -> dict:
     # Pop the last undoable checkpoint (may be command-based or deletion-based)
     cp = checkpoint_manager.pop_undo(task_id)
 
+    # If nothing for this task_id, fall back to the most recent undoable
+    # checkpoint across all tasks (supports cross-request undo).
+    if not cp:
+        cp = checkpoint_manager.pop_global_undo()
+
     if not cp:
         return {
             "ok": False,

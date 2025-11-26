@@ -535,7 +535,7 @@ class CheckpointManager:
     Checkpoints are cleared when a task completes.
     """
 
-    def __init__(self, default_max_retries: int = 3):
+    def __init__(self, default_max_retries: int = 3, max_terminal_checkpoints: int = 5):
         """
         Initialize the checkpoint manager.
         
@@ -546,7 +546,14 @@ class CheckpointManager:
         self._web_stacks: Dict[str, List[WebCheckpoint]] = {}
         self._undo_gen = UndoGenerator()
         self.default_max_retries = default_max_retries
-        logger.info("CheckpointManager initialized")
+        # Maximum number of terminal checkpoints to retain globally.
+        # When capacity is exceeded, the oldest checkpoints are dropped.
+        self.max_terminal_checkpoints = max_terminal_checkpoints
+        logger.info(
+            "CheckpointManager initialized "
+            f"(max_terminal_checkpoints={self.max_terminal_checkpoints}, "
+            f"default_max_retries={self.default_max_retries})"
+        )
 
     # -------------------------------------------------------------------------
     # Terminal Operations
@@ -596,13 +603,55 @@ class CheckpointManager:
         if task_id not in self._terminal_stacks:
             self._terminal_stacks[task_id] = []
         self._terminal_stacks[task_id].append(cp)
-        
+
+        # Enforce global capacity for terminal checkpoints (rolling buffer)
+        self._enforce_terminal_capacity()
+
         logger.info(
             f"[{task_id}] Recorded terminal checkpoint: {command[:50]}... "
             f"(reversible={cp.reversible})"
         )
         
         return cp
+
+    def _enforce_terminal_capacity(self) -> None:
+        """
+        Keep only the most recent N terminal checkpoints globally.
+        
+        When the total number of TerminalCheckpoint instances across all tasks
+        exceeds max_terminal_checkpoints, the oldest checkpoints are removed
+        (based on their timestamp), regardless of task_id.
+        """
+        # Collect all checkpoints with task_id and index
+        all_items: List[tuple[str, int, TerminalCheckpoint]] = []
+        for task_id, stack in self._terminal_stacks.items():
+            for idx, cp in enumerate(stack):
+                all_items.append((task_id, idx, cp))
+
+        if len(all_items) <= self.max_terminal_checkpoints:
+            return
+
+        # Sort by timestamp (oldest first)
+        all_items.sort(key=lambda x: x[2].timestamp)
+        to_remove_count = len(all_items) - self.max_terminal_checkpoints
+        to_trim = all_items[:to_remove_count]
+
+        # Group indices by task_id and delete from stacks in reverse index order
+        to_remove_by_task: Dict[str, List[int]] = {}
+        for task_id, idx, _ in to_trim:
+            to_remove_by_task.setdefault(task_id, []).append(idx)
+
+        for task_id, idxs in to_remove_by_task.items():
+            stack = self._terminal_stacks.get(task_id, [])
+            for idx in sorted(set(idxs), reverse=True):
+                if 0 <= idx < len(stack):
+                    removed = stack.pop(idx)
+                    logger.info(
+                        f"[{task_id}] Dropped old terminal checkpoint: "
+                        f"{removed.command[:50]}..."
+                    )
+            if not stack:
+                self._terminal_stacks.pop(task_id, None)
 
     def pop_undo(self, task_id: str) -> Optional[TerminalCheckpoint]:
         """
@@ -636,6 +685,43 @@ class CheckpointManager:
         
         logger.info(f"[{task_id}] Nothing to undo")
         return None
+
+    def pop_global_undo(self) -> Optional[TerminalCheckpoint]:
+        """
+        Pop and return the most recent undoable checkpoint across ALL tasks.
+        
+        Uses checkpoint timestamps to find the latest undoable operation
+        (either command-based or deletion-based).
+        """
+        latest_cp: Optional[TerminalCheckpoint] = None
+        latest_task_id: Optional[str] = None
+        latest_index: Optional[int] = None
+
+        for task_id, stack in self._terminal_stacks.items():
+            for idx in range(len(stack) - 1, -1, -1):
+                cp = stack[idx]
+                if not (cp.undo_command or (cp.is_deletion and cp.backup_path)):
+                    continue
+                if latest_cp is None or cp.timestamp > latest_cp.timestamp:
+                    latest_cp = cp
+                    latest_task_id = task_id
+                    latest_index = idx
+
+        if latest_cp is None or latest_task_id is None or latest_index is None:
+            logger.info("[global] Nothing to undo across tasks")
+            return None
+
+        # Remove from the originating task stack
+        stack = self._terminal_stacks.get(latest_task_id, [])
+        if 0 <= latest_index < len(stack):
+            stack.pop(latest_index)
+
+        logger.info(
+            f"[global] Popped undo checkpoint from task {latest_task_id}: "
+            f"{latest_cp.command[:50]}... "
+            f"(undo_command={latest_cp.undo_command}, is_deletion={latest_cp.is_deletion})"
+        )
+        return latest_cp
 
     def peek_undo(self, task_id: str) -> Optional[TerminalCheckpoint]:
         """

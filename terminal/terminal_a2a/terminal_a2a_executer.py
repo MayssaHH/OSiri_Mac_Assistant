@@ -21,8 +21,10 @@ from a2a.utils.parts import get_data_parts
 from terminal_mcp.terminal_agent import build_planner_agent, build_executor_agent
 from terminal_mcp.terminal_mcp_server import classify_risk
 from terminal_mcp.terminal_client import (
-    set_current_task_id, 
+    set_current_task_id,
     clear_task_checkpoints,
+    open_shell,
+    undo_last,
 )
 from agent_framework.openai import OpenAIChatClient
 from dotenv import load_dotenv
@@ -50,12 +52,12 @@ class TerminalAgentExecutor(AgentExecutor):
         self.executor = build_executor_agent(client)
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        # Generate a unique task ID for checkpoint tracking
-        task_id = f"terminal_{uuid.uuid4().hex[:8]}"
-        
         # 1) Extract user text
         task_text = get_message_text(context.message)
         task_text = (task_text or "").strip()
+
+        # Generate a unique task ID for checkpoint tracking
+        task_id = f"terminal_{uuid.uuid4().hex[:8]}"
 
         # 2) Extract optional structured params (like approved=True)
         approved = False
@@ -64,6 +66,63 @@ class TerminalAgentExecutor(AgentExecutor):
             approved = any(bool(dp.get("approved", False)) for dp in data_parts)
 
         logger.info(f"[A2A] task_id={task_id}, task_text={task_text!r}, approved={approved}")
+
+        # ------------------------------------------------------------------
+        # Special-case undo intent: call MCP undo_last instead of planning
+        # new shell commands (e.g., rm or Trash-based recovery).
+        # ------------------------------------------------------------------
+        lower_text = task_text.lower()
+        undo_keywords = [
+            "undo the last command",
+            "undo last command",
+            "undo the last terminal command",
+            "undo my last terminal command",
+            "revert the last command",
+            "revert last command",
+            "recover the last command",
+            "recover last command",
+            "recover the file",
+            "recover my file",
+            "restore the file",
+            "restore my file",
+            "undelete the file",
+            "undelete my file",
+        ]
+        if any(k in lower_text for k in undo_keywords):
+            logger.info("[A2A] Detected undo intent - calling MCP undo_last directly")
+            try:
+                # Open a transient shell session for command-based undos
+                session_id = await open_shell()
+                undo_raw = await undo_last(session_id)
+                try:
+                    undo_payload = json.loads(undo_raw)
+                except Exception:
+                    undo_payload = {"raw": undo_raw}
+
+                payload = {
+                    "ok": undo_payload.get("ok", False),
+                    "task_id": task_id,
+                    "undo": undo_payload,
+                }
+
+                await event_queue.enqueue_event(
+                    new_agent_text_message(json.dumps(payload, indent=2))
+                )
+                return
+            except Exception as e:
+                logger.error(f"[A2A] Undo flow failed: {e}", exc_info=True)
+                await event_queue.enqueue_event(
+                    new_agent_text_message(
+                        json.dumps(
+                            {
+                                "ok": False,
+                                "error": f"Undo failed: {e}",
+                            },
+                            indent=2,
+                        )
+                    )
+                )
+                return
 
         # 3) Plan - use planner.run() to get JSON plan
         plan_res = await self.planner.run(task_text)
@@ -129,13 +188,6 @@ class TerminalAgentExecutor(AgentExecutor):
             # Always reset so settings don't leak to later tasks
             set_approved_mode(False)
             set_current_task_id(None)
-            
-            # Clear checkpoints for this task on completion
-            try:
-                await clear_task_checkpoints(task_id)
-                logger.info(f"[A2A] Cleared checkpoints for task {task_id}")
-            except Exception as e:
-                logger.warning(f"[A2A] Failed to clear checkpoints: {e}")
 
         exec_text = exec_res.text.strip()
         try:

@@ -202,10 +202,12 @@ async def undo_last(
     
     Returns information about what was undone, or an error if nothing to undo.
     """
-    task_id = CURRENT_TASK_ID
-    if not task_id:
-        return json.dumps({"ok": False, "error": "No task_id set - cannot undo"})
-    
+    # NOTE:
+    # - When CURRENT_TASK_ID is set, we scope undo to that task.
+    # - When it's None, we pass an empty task_id and let the server
+    #   fall back to a global "most recent undoable" checkpoint.
+    task_id = CURRENT_TASK_ID or ""
+
     res = await terminal_mcp.call_tool(
         "undo_last", 
         {"task_id": task_id, "session_id": session_id}
