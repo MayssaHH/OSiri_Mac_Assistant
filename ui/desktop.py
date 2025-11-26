@@ -1,6 +1,6 @@
 """
-OSiri Desktop App - Codex-like floating window
-Opens the OSiri web UI in a native Mac window
+OSiri Desktop App - Siri-like floating command bar
+A minimal floating window that stays at the bottom center of the screen
 """
 
 import subprocess
@@ -11,9 +11,9 @@ import signal
 import webview
 
 # Configuration
-WEB_UI_URL = "http://127.0.0.1:7860"
-WINDOW_WIDTH = 420
-WINDOW_HEIGHT = 640
+WEB_UI_URL = "http://127.0.0.1:7861"  # Siri UI port
+WINDOW_WIDTH = 650
+WINDOW_HEIGHT = 400
 
 
 class OSiriDesktopApp:
@@ -22,21 +22,21 @@ class OSiriDesktopApp:
         self.window = None
         
     def start_server(self):
-        """Start the Gradio server in the background."""
-        print("🚀 Starting OSiri web server...")
+        """Start the Siri UI server in the background."""
+        print("🚀 Starting OSiri server...")
         self.server_process = subprocess.Popen(
-            [sys.executable, "app.py"],
+            [sys.executable, "siri_ui.py"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=sys.path[0] or "."
         )
         
         # Wait for server to be ready
-        time.sleep(3)
+        time.sleep(2)
         print("✅ Server started!")
         
     def stop_server(self):
-        """Stop the Gradio server."""
+        """Stop the server."""
         if self.server_process:
             print("🛑 Stopping server...")
             self.server_process.terminate()
@@ -52,19 +52,20 @@ class OSiriDesktopApp:
         server_thread = threading.Thread(target=self.start_server, daemon=True)
         server_thread.start()
         
-        # Wait a bit for server to start
-        time.sleep(4)
+        # Wait for server to start
+        time.sleep(3)
         
-        # Create the floating window
+        # Create the floating window - frameless and transparent
         self.window = webview.create_window(
             title="OSiri",
             url=WEB_UI_URL,
             width=WINDOW_WIDTH,
             height=WINDOW_HEIGHT,
-            resizable=True,
-            on_top=True,  # Always on top (Codex-like!)
-            confirm_close=False,
-            background_color='#f5f5f7'  # Mac-like background
+            resizable=False,
+            frameless=True,  # No window chrome
+            easy_drag=True,  # Allow dragging anywhere
+            on_top=True,  # Always on top
+            transparent=True,  # Transparent background!
         )
         
         # Handle graceful shutdown
@@ -84,8 +85,8 @@ def main():
     """Main entry point."""
     print("""
     ╔═══════════════════════════════════════╗
-    ║         🍎 OSiri Desktop App          ║
-    ║   Your AI-powered Mac Assistant       ║
+    ║         🍎 OSiri Command Bar          ║
+    ║     Siri-style floating assistant     ║
     ╚═══════════════════════════════════════╝
     """)
     
@@ -108,4 +109,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

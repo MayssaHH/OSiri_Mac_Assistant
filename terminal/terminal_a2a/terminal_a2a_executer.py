@@ -88,7 +88,12 @@ class TerminalAgentExecutor(AgentExecutor):
             "undelete the file",
             "undelete my file",
         ]
-        if any(k in lower_text for k in undo_keywords):
+        # Check if any undo keyword is present along with indicators of "last" action
+        is_undo_intent = any(k in lower_text for k in undo_keywords) and any(
+            indicator in lower_text for indicator in ["last", "recent", "deleted", "file"]
+        )
+        
+        if is_undo_intent:
             logger.info("[A2A] Detected undo intent - calling MCP undo_last directly")
             try:
                 # Open a transient shell session for command-based undos
@@ -99,9 +104,24 @@ class TerminalAgentExecutor(AgentExecutor):
                 except Exception:
                     undo_payload = {"raw": undo_raw}
 
+                # Build user-friendly message
+                ok = undo_payload.get("ok", False)
+                if ok:
+                    undone_cmd = undo_payload.get("undone_command", "")
+                    restore_result = undo_payload.get("restore_result", {})
+                    restored_count = restore_result.get("restored_count", 0)
+                    
+                    if restored_count > 0:
+                        message = f"Successfully recovered {restored_count} file(s) from the command: {undone_cmd}"
+                    else:
+                        message = f"Successfully undid the command: {undone_cmd}"
+                else:
+                    message = undo_payload.get("error", "Failed to undo the last operation")
+
                 payload = {
-                    "ok": undo_payload.get("ok", False),
+                    "ok": ok,
                     "task_id": task_id,
+                    "message": message,
                     "undo": undo_payload,
                 }
 

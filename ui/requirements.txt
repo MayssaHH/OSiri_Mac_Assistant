@@ -1,8 +1,7 @@
 # OSiri UI Dependencies
-gradio>=4.0.0
+fastapi>=0.100.0
 httpx
 python-dotenv
 pywebview>=4.0.0
 uvicorn
 a2a-sdk
-
