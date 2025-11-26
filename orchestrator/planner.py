@@ -52,13 +52,13 @@ class PlannerLLM:
         plan = _extract_json(text)
 
         if plan is None:
-            # safe fallback plan
+            # safe fallback plan - use instructions when plan parsing fails
             return {
                 "goal": user_task[:80],
                 "subtasks": [
                     {
                         "id": "s1",
-                        "agent": "web",
+                        "agent": "instructions",
                         "task": user_task,
                         "output_key": "result"
                     }
@@ -74,15 +74,15 @@ def validate_plan(plan: Dict[str, Any], allowed_agents: List[str]) -> Dict[str, 
         return {
             "goal": plan.get("goal", ""),
             "subtasks": [
-                {"id": "s1", "agent": "web", "task": plan.get("goal", ""), "output_key": "result"}
+                {"id": "s1", "agent": "instructions", "task": plan.get("goal", ""), "output_key": "result"}
             ],
         }
 
     clean = []
     for i, st in enumerate(subtasks, start=1):
-        agent = (st.get("agent") or "web").lower()
+        agent = (st.get("agent") or "instructions").lower()
         if agent not in allowed_agents:
-            agent = "web"
+            agent = "instructions"  # Default to instructions instead of web
         clean.append({
             "id": st.get("id") or f"s{i}",
             "agent": agent,

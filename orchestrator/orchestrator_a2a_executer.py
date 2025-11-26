@@ -16,7 +16,8 @@ from a2a.utils.parts import get_data_parts
 from dotenv import load_dotenv
 
 from planner import PlannerLLM, validate_plan
-from synthesizer import SynthesizerLLM 
+from synthesizer import SynthesizerLLM
+from prompt import get_instructions_system_prompt 
 
 logger = logging.getLogger("orchestrator-a2a")
 logger.setLevel(logging.INFO)
@@ -37,7 +38,7 @@ TERMINAL_URL = os.getenv("TERMINAL_AGENT_URL")
 WEB_URL = os.getenv("WEB_AGENT_URL")
 APP_URL = os.getenv("APP_AGENT_URL")
 
-ALLOWED_AGENTS = ["terminal", "web", "app"]
+ALLOWED_AGENTS = ["terminal", "web", "app", "instructions"]
 
 async def call_downstream(agent_url: str, user_text: str, data_parts: Optional[list] = None) -> Dict[str, Any]:
     logger.info(f"[call_downstream] Initiating call to agent at {agent_url}")
@@ -100,6 +101,95 @@ async def call_downstream(agent_url: str, user_text: str, data_parts: Optional[l
             return {"raw_text": text}
 
 
+async def generate_instructions(
+    task: str,
+    goal: str,
+    use_web_research: bool = True
+) -> Dict[str, Any]:
+    """
+    Generate step-by-step instructions for tasks that cannot be automated.
+    
+    Optionally uses web agent to research methods before generating instructions.
+    """
+    logger.info(f"[generate_instructions] Generating instructions for: {task[:100]}...")
+    
+    instructions_text = ""
+    
+    # Option 1: Use web agent to research first (if enabled and web agent available)
+    if use_web_research and WEB_URL:
+        try:
+            research_query = f"How to {task.lower()}"
+            logger.info(f"[generate_instructions] Researching: {research_query}")
+            web_research = await call_downstream(WEB_URL, research_query)
+            
+            # Extract research results
+            research_content = ""
+            if isinstance(web_research, dict):
+                if "execution" in web_research and isinstance(web_research["execution"], dict):
+                    research_content = web_research["execution"].get("final_result", "")
+                elif "final_answer" in web_research:
+                    research_content = web_research["final_answer"]
+                elif "text" in web_research:
+                    research_content = web_research["text"]
+            
+            if research_content:
+                instructions_text = f"Based on research:\n{research_content}\n\n"
+        except Exception as e:
+            logger.warning(f"[generate_instructions] Web research failed: {e}, proceeding without research")
+    
+    # Option 2: Generate instructions using LLM
+    api_key = os.environ.get("OPENAI_API_KEY")
+    base_url = "https://api.openai.com/v1"
+    model = "gpt-4o"
+    
+    system_prompt = get_instructions_system_prompt()
+    
+    user_prompt = f"""Task: {task}
+Goal: {goal}
+
+{instructions_text if instructions_text else ""}Generate clear, step-by-step instructions for the user to complete this task manually."""
+    
+    try:
+        url = f"{base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        
+        payload = {
+            "model": model,
+            "temperature": 0.7,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+        
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout=60)) as hc:
+            r = await hc.post(url, headers=headers, json=payload)
+            r.raise_for_status()
+            data = r.json()
+        
+        instructions = data["choices"][0]["message"]["content"].strip()
+        
+        logger.info(f"[generate_instructions] Generated instructions ({len(instructions)} chars)")
+        
+        return {
+            "ok": True,
+            "instructions": instructions,
+            "reason": "Task requires manual user action - cannot be automated by available agents",
+            "task": task,
+            "goal": goal
+        }
+    except Exception as e:
+        logger.error(f"[generate_instructions] Failed to generate instructions: {e}")
+        return {
+            "ok": False,
+            "error": f"Failed to generate instructions: {str(e)}",
+            "instructions": f"I'm unable to automate this task: {task}. Please complete it manually.",
+            "reason": "Task requires manual user action"
+        }
+
 
 class OrchestratorExecutor(AgentExecutor):
     def __init__(self):
@@ -132,17 +222,23 @@ class OrchestratorExecutor(AgentExecutor):
             # simple variable substitution from state
             task_filled = task_template.format(**state)
 
-            # Route to appropriate agent URL
-            if agent == "terminal":
+            # Route to appropriate agent or generate instructions
+            if agent == "instructions":
+                # Generate instructions instead of calling an agent
+                downstream_res = await generate_instructions(task_filled, plan["goal"], use_web_research=True)
+            elif agent == "terminal":
                 agent_url = TERMINAL_URL
+                downstream_res = await call_downstream(agent_url, task_filled, data_parts=data_parts)
             elif agent == "web":
                 agent_url = WEB_URL
+                downstream_res = await call_downstream(agent_url, task_filled, data_parts=data_parts)
             elif agent == "app":
                 agent_url = APP_URL
+                downstream_res = await call_downstream(agent_url, task_filled, data_parts=data_parts)
             else:
-                # Fallback to web if unknown agent
-                agent_url = WEB_URL
-            downstream_res = await call_downstream(agent_url, task_filled, data_parts=data_parts)
+                # Fallback to instructions if unknown agent
+                logger.warning(f"[Orchestrator] Unknown agent '{agent}', generating instructions")
+                downstream_res = await generate_instructions(task_filled, plan["goal"], use_web_research=True)
 
             trace.append({
                 "id": st["id"],
@@ -172,9 +268,12 @@ class OrchestratorExecutor(AgentExecutor):
             
             # Extract the actual result from the response
             if isinstance(downstream_res, dict):
+                # Instructions agent format: extract instructions
+                if "instructions" in downstream_res:
+                    state[key] = downstream_res["instructions"]
                 # Web agent and App agent format: extract final_result from execution
                 # Both return {"plan": {...}, "execution": {"final_result": "...", ...}}
-                if "execution" in downstream_res and isinstance(downstream_res["execution"], dict):
+                elif "execution" in downstream_res and isinstance(downstream_res["execution"], dict):
                     final_result = downstream_res["execution"].get("final_result")
                     if final_result:
                         state[key] = final_result

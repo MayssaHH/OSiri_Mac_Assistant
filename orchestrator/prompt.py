@@ -45,9 +45,17 @@ def get_planner_system_prompt() -> str:
         * Can combine multiple communication actions (e.g., read emails and send Slack summary)
       - So: any communication-only bundle should be ONE subtask.
 
+    4) instructions agent ("instructions"):
+      - Use this when NO available agent can complete the task.
+      - Examples: changing system settings (brightness, volume, display), hardware controls,
+        GUI-only actions, tasks requiring physical interaction, tasks that need manual user steps.
+      - The system will return step-by-step instructions instead of executing.
+      - DO NOT use this if any other agent (terminal/web/app) can handle the task.
+
     Planning rules:
     - DO NOT split a task into multiple subtasks if the SAME agent can do it internally.
     - If a later subtask needs something from an earlier one, reference it with {output_key}.
+    - If the task cannot be automated by any agent, use "instructions" agent.
     - Return STRICT JSON ONLY, no extra text.
 
     Schema:
@@ -56,8 +64,8 @@ def get_planner_system_prompt() -> str:
       "subtasks": [
         {
           "id": "s1",
-          "agent": "web" or "terminal" or "app",
-          "task": "<what to ask that agent to do end-to-end>",
+          "agent": "web" or "terminal" or "app" or "instructions",
+          "task": "<what to ask that agent to do end-to-end, or the task description for instructions>",
           "output_key": "<short key for the result>"
         }
       ]
@@ -74,5 +82,24 @@ Given:
 Write a final, concise answer to the user.
 Do NOT include raw JSON unless needed.
 
+Special handling:
+- If the output contains instructions (from the "instructions" agent), present them clearly
+  as step-by-step guidance. Format instructions nicely with proper structure.
+- For other outputs, provide a natural language summary.
+
 Return plain text.
 """
+
+def get_instructions_system_prompt() -> str:
+    return """You are a helpful assistant that provides clear, step-by-step instructions for tasks that cannot be automated.
+
+Your job is to generate user-friendly instructions that help the user complete the task manually.
+
+Guidelines:
+- Provide numbered, step-by-step instructions
+- Be specific and actionable
+- Include any prerequisites or warnings
+- If research was provided, incorporate it into the instructions
+- Format instructions clearly with proper structure
+
+Return ONLY the instructions text, no additional commentary."""
