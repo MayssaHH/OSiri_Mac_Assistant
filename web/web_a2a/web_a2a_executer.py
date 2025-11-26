@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Dict
 
@@ -19,6 +20,10 @@ from a2a.server.events import EventQueue
 from a2a.utils.message import get_message_text, new_agent_text_message
 
 from web_mcp.web_agent import build_planner_agent, build_executor_agent
+from web_mcp.web_client import (
+    set_current_task_id,
+    clear_task_checkpoints,
+)
 from agent_framework.openai import OpenAIChatClient
 from dotenv import load_dotenv
 
@@ -46,12 +51,15 @@ class WebAgentExecutor(AgentExecutor):
         self.executor = build_executor_agent(client)
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        # Generate a unique task ID for checkpoint tracking
+        task_id = f"web_{uuid.uuid4().hex[:8]}"
+        
         try:
             # 1) Extract user text
             task_text = get_message_text(context.message)
             task_text = (task_text or "").strip()
 
-            logger.info(f"[A2A] Received task: {task_text!r}")
+            logger.info(f"[A2A] task_id={task_id}, Received task: {task_text!r}")
 
             # 2) Plan - use planner.run() to get JSON plan
             plan_res = await self.planner.run(task_text)
@@ -87,6 +95,9 @@ class WebAgentExecutor(AgentExecutor):
             {json.dumps(plan, indent=2)}
             """.strip()
 
+            # Set task_id for checkpoint tracking (enables auto-retry)
+            set_current_task_id(task_id)
+            
             try:
                 exec_res = await self.executor.run(exec_prompt)
             except Exception as e:
@@ -95,6 +106,11 @@ class WebAgentExecutor(AgentExecutor):
                     new_agent_text_message(f"Error during execution: {repr(e)}")
                 )
                 return
+            finally:
+                # Reset task_id and clear checkpoints
+                set_current_task_id(None)
+                clear_task_checkpoints(task_id)
+                logger.info(f"[A2A] Cleared checkpoints for task {task_id}")
 
             exec_text = exec_res.text.strip()
             try:
@@ -106,6 +122,7 @@ class WebAgentExecutor(AgentExecutor):
             # 4) Return final response
             payload = {
                 "ok": True,
+                "task_id": task_id,
                 "plan": plan,
                 "execution": exec_report
             }
@@ -116,6 +133,9 @@ class WebAgentExecutor(AgentExecutor):
             logger.info("[A2A] Task completed successfully")
         except Exception as e:
             logger.error(f"[A2A] Unexpected error: {e}", exc_info=True)
+            # Ensure cleanup even on unexpected error
+            set_current_task_id(None)
+            clear_task_checkpoints(task_id)
             await event_queue.enqueue_event(
                 new_agent_text_message(f"Error: {repr(e)}")
             )

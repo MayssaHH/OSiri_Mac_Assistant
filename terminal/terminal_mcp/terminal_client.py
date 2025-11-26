@@ -8,11 +8,25 @@ from agent_framework import ai_function
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+# Global state for current execution context
 APPROVED_MODE = False
+CURRENT_TASK_ID: Optional[str] = None
+
 
 def set_approved_mode(v: bool):
     global APPROVED_MODE
     APPROVED_MODE = bool(v)
+
+
+def set_current_task_id(task_id: Optional[str]):
+    """Set the current task ID for checkpoint tracking"""
+    global CURRENT_TASK_ID
+    CURRENT_TASK_ID = task_id
+
+
+def get_current_task_id() -> Optional[str]:
+    """Get the current task ID"""
+    return CURRENT_TASK_ID
 
 class TerminalMCPClient:
     def __init__(self, server_script_path: str):
@@ -120,10 +134,17 @@ async def run_command(
     command: Annotated[str, Field(description="Terminal command to execute")],
     timeout_s: Annotated[int, Field(description="Timeout in seconds")] = 30,
 ) -> str:
-    res = await terminal_mcp.call_tool(
-        "run_command",
-        {"session_id": session_id, "command": command, "timeout_s": timeout_s, "approved": APPROVED_MODE},
-    )
+    args = {
+        "session_id": session_id, 
+        "command": command, 
+        "timeout_s": timeout_s, 
+        "approved": APPROVED_MODE,
+    }
+    # Pass task_id for checkpoint tracking if set
+    if CURRENT_TASK_ID:
+        args["task_id"] = CURRENT_TASK_ID
+    
+    res = await terminal_mcp.call_tool("run_command", args)
     payload = unwrap_mcp_result(res)
 
     try:
@@ -163,6 +184,70 @@ async def get_cwd(
     res = await terminal_mcp.call_tool("get_cwd", {"session_id": session_id})
     payload = unwrap_mcp_result(res)
     return payload.get("cwd", "") if isinstance(payload, dict) else str(payload)
+
+
+# ============================================================================
+# Checkpoint/Undo Functions
+# ============================================================================
+
+@ai_function(
+    name="undo_last",
+    description="Undo the last reversible command for the current task."
+)
+async def undo_last(
+    session_id: Annotated[str, Field(description="Shell session id to run the undo command in")],
+) -> str:
+    """
+    Undo the last reversible command for the current task.
+    
+    Returns information about what was undone, or an error if nothing to undo.
+    """
+    task_id = CURRENT_TASK_ID
+    if not task_id:
+        return json.dumps({"ok": False, "error": "No task_id set - cannot undo"})
+    
+    res = await terminal_mcp.call_tool(
+        "undo_last", 
+        {"task_id": task_id, "session_id": session_id}
+    )
+    payload = unwrap_mcp_result(res)
+    
+    try:
+        return json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        return str(payload)
+
+
+@ai_function(
+    name="get_undo_history",
+    description="Get the list of commands that can be undone for the current task."
+)
+async def get_undo_history() -> str:
+    """
+    Get all reversible commands that can be undone for the current task.
+    """
+    task_id = CURRENT_TASK_ID
+    if not task_id:
+        return json.dumps({"ok": False, "error": "No task_id set"})
+    
+    res = await terminal_mcp.call_tool("get_undo_history", {"task_id": task_id})
+    payload = unwrap_mcp_result(res)
+    
+    try:
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+    except Exception:
+        return str(payload)
+
+
+async def clear_task_checkpoints(task_id: str) -> dict:
+    """
+    Clear all checkpoints for a completed task.
+    
+    This should be called when a task finishes (success or failure).
+    Not exposed as an ai_function - called programmatically by executor.
+    """
+    res = await terminal_mcp.call_tool("clear_checkpoints", {"task_id": task_id})
+    return unwrap_mcp_result(res)
 
 
 

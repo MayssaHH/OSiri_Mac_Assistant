@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 import time
 import uuid
@@ -8,7 +9,17 @@ from typing import Dict, Optional
 
 from mcp.server.fastmcp import FastMCP
 
+# Add parent directories to path for common imports
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from common.checkpoint import CheckpointManager
+
 mcp = FastMCP(name="Terminal MCP Server")
+
+# Global checkpoint manager for undo support
+checkpoint_manager = CheckpointManager()
 
 # This is a stronger safety layer that rejects commands that are known to be dangerous.
 HIGH_PATTERNS = [
@@ -225,12 +236,55 @@ def open_shell(cwd: str | None = None) -> dict:
     return {"session_id": sid}
 
 @mcp.tool()
-def run_command(session_id: str, command: str, timeout_s: float = 20.0, approved: bool = False) -> dict:
+def run_command(
+    session_id: str, 
+    command: str, 
+    timeout_s: float = 20.0, 
+    approved: bool = False,
+    task_id: str = "",
+) -> dict:
     """
     Run a command inside a given shell session.
-    Returns {ok, output, exit_code} or {ok, error}.
+    
+    Args:
+        session_id: The shell session to run the command in
+        command: The shell command to execute
+        timeout_s: Timeout in seconds (default 20)
+        approved: Whether risky commands are pre-approved
+        task_id: Optional task ID for checkpoint tracking (enables undo)
+    
+    Returns:
+        {ok, output, exit_code, cwd, risk} on success
+        {ok, error, ...} on failure
+        
+    If task_id is provided, the command is recorded in the checkpoint system
+    and can be undone with undo_last().
     """
-    return manager.run_command(session_id, command, timeout_s=timeout_s, approved=approved)
+    # Get cwd BEFORE execution
+    s = manager.sessions.get(session_id)
+    cwd_before = s.cwd if s else ""
+    
+    # Execute the command
+    result = manager.run_command(session_id, command, timeout_s=timeout_s, approved=approved)
+    
+    # Record checkpoint if task_id provided and command succeeded
+    if task_id and result.get("ok", False):
+        cwd_after = result.get("cwd", cwd_before)
+        cp = checkpoint_manager.record_terminal(
+            task_id=task_id,
+            command=command,
+            cwd_before=cwd_before,
+            cwd_after=cwd_after,
+            session_id=session_id,
+            result=result,
+        )
+        # Add checkpoint info to result
+        result["checkpoint_id"] = cp.id
+        result["reversible"] = cp.reversible
+        if cp.undo_command:
+            result["undo_command"] = cp.undo_command
+    
+    return result
 
 @mcp.tool()
 def close_shell(session_id: str) -> dict:
@@ -247,6 +301,93 @@ def get_cwd(session_id: str) -> dict:
     if not s:
         return {"ok": False, "error": f"Unknown session_id: {session_id}"}
     return {"ok": True, "cwd": s.cwd}
+
+
+# ============================================================================
+# Checkpoint/Undo Tools
+# ============================================================================
+
+@mcp.tool()
+def undo_last(task_id: str, session_id: str) -> dict:
+    """
+    Undo the last reversible command for a task.
+    
+    Pops the most recent reversible checkpoint and executes its undo command.
+    Non-reversible commands (rm, mv, cp, etc.) are skipped.
+    
+    Args:
+        task_id: The task whose last command should be undone
+        session_id: The shell session to run the undo command in
+        
+    Returns:
+        {ok, undone_command, undo_command, result} on success
+        {ok, error} if nothing to undo
+    """
+    # Pop the last reversible checkpoint
+    cp = checkpoint_manager.pop_undo(task_id)
+    
+    if not cp:
+        return {
+            "ok": False, 
+            "error": "Nothing to undo - no reversible commands in history"
+        }
+    
+    if not cp.undo_command:
+        return {
+            "ok": False,
+            "error": f"Command '{cp.command}' is not reversible"
+        }
+    
+    # Execute the undo command (with approved=True since this is a controlled undo)
+    undo_result = manager.run_command(
+        session_id, 
+        cp.undo_command, 
+        timeout_s=20.0, 
+        approved=True
+    )
+    
+    return {
+        "ok": undo_result.get("ok", False),
+        "undone_command": cp.command,
+        "undo_command": cp.undo_command,
+        "result": undo_result,
+    }
+
+
+@mcp.tool()
+def get_undo_history(task_id: str) -> dict:
+    """
+    Get the list of reversible commands that can be undone for a task.
+    
+    Args:
+        task_id: The task to get undo history for
+        
+    Returns:
+        {ok, history} where history is a list of {command, undo_command}
+    """
+    history = checkpoint_manager.get_undo_history(task_id)
+    return {
+        "ok": True,
+        "count": len(history),
+        "history": history,
+    }
+
+
+@mcp.tool()
+def clear_checkpoints(task_id: str) -> dict:
+    """
+    Clear all checkpoints for a completed task.
+    
+    Should be called when a task finishes to free memory.
+    
+    Args:
+        task_id: The task whose checkpoints should be cleared
+        
+    Returns:
+        {ok: True}
+    """
+    checkpoint_manager.clear_task(task_id)
+    return {"ok": True}
 
 
 def main():

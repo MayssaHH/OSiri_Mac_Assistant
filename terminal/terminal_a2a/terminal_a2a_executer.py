@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -19,6 +20,10 @@ from a2a.utils.parts import get_data_parts
 
 from terminal_mcp.terminal_agent import build_planner_agent, build_executor_agent
 from terminal_mcp.terminal_mcp_server import classify_risk
+from terminal_mcp.terminal_client import (
+    set_current_task_id, 
+    clear_task_checkpoints,
+)
 from agent_framework.openai import OpenAIChatClient
 from dotenv import load_dotenv
 
@@ -45,6 +50,9 @@ class TerminalAgentExecutor(AgentExecutor):
         self.executor = build_executor_agent(client)
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        # Generate a unique task ID for checkpoint tracking
+        task_id = f"terminal_{uuid.uuid4().hex[:8]}"
+        
         # 1) Extract user text
         task_text = get_message_text(context.message)
         task_text = (task_text or "").strip()
@@ -55,7 +63,7 @@ class TerminalAgentExecutor(AgentExecutor):
         if data_parts:
             approved = any(bool(dp.get("approved", False)) for dp in data_parts)
 
-        logger.info(f"[A2A] task_text={task_text!r}, approved={approved}")
+        logger.info(f"[A2A] task_id={task_id}, task_text={task_text!r}, approved={approved}")
 
         # 3) Plan - use planner.run() to get JSON plan
         plan_res = await self.planner.run(task_text)
@@ -110,12 +118,24 @@ class TerminalAgentExecutor(AgentExecutor):
         """.strip()
 
         from terminal_mcp.terminal_client import set_approved_mode 
+        
+        # Set task_id and approved mode for checkpoint tracking
+        set_current_task_id(task_id)
         set_approved_mode(approved)
+        
         try:
             exec_res = await self.executor.run(exec_prompt)
         finally:
-            # Always reset so approval doesn't leak to later tasks
+            # Always reset so settings don't leak to later tasks
             set_approved_mode(False)
+            set_current_task_id(None)
+            
+            # Clear checkpoints for this task on completion
+            try:
+                await clear_task_checkpoints(task_id)
+                logger.info(f"[A2A] Cleared checkpoints for task {task_id}")
+            except Exception as e:
+                logger.warning(f"[A2A] Failed to clear checkpoints: {e}")
 
         exec_text = exec_res.text.strip()
         try:
@@ -127,6 +147,7 @@ class TerminalAgentExecutor(AgentExecutor):
         # 5) Return final response
         payload = {
             "ok": True,
+            "task_id": task_id,
             "plan": plan,
             "execution": exec_report
         }
