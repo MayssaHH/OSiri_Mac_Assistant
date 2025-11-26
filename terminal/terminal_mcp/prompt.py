@@ -34,7 +34,10 @@ def get_planner_prompt():
     - Do NOT call tools.
     - Commands must be safe and minimal.
     - If you need a shell, assume one session reused for all steps.
-    - Verification should be a simple command (ls, test -f, pwd, etc.).
+    - Verification should be a SIMPLE command that returns exit code 0 on success.
+      GOOD verify commands: "pwd", "ls filename", "test -d folder", "test -f file", "test ! -d folder"
+      BAD verify commands: "test $(pwd) == ~/Desktop" (syntax errors in zsh)
+      Keep verify commands simple - no complex shell expansions or comparisons.
     - IMPORTANT: If the user wants to undo/revert the last command or
       recover/restore a recently deleted file, do NOT design new shell
       commands that simulate undo (like rm, mv from ~/.Trash, etc.).

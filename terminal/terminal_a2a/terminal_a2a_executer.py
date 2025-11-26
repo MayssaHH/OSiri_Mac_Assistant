@@ -34,6 +34,22 @@ load_dotenv()
 logger = logging.getLogger("terminal-a2a-executor")
 logger.setLevel(logging.INFO)
 
+
+def strip_markdown_json(text: str) -> str:
+    """Strip markdown code block markers from JSON response."""
+    text = text.strip()
+    # Handle ```json ... ``` or ``` ... ```
+    if text.startswith("```"):
+        # Find the end of the first line (might be ```json or just ```)
+        first_newline = text.find("\n")
+        if first_newline != -1:
+            text = text[first_newline + 1:]
+        # Remove trailing ```
+        if text.endswith("```"):
+            text = text[:-3]
+    return text.strip()
+
+
 class TerminalAgentExecutor(AgentExecutor):
     """
     Single A2A-facing executor.
@@ -147,9 +163,12 @@ class TerminalAgentExecutor(AgentExecutor):
         # 3) Plan - use planner.run() to get JSON plan
         plan_res = await self.planner.run(task_text)
         plan_text = plan_res.text.strip()
+        
+        # Strip markdown code blocks if present (LLM often wraps JSON in ```json ... ```)
+        plan_text_clean = strip_markdown_json(plan_text)
 
         try:
-            plan: Dict[str, Any] = json.loads(plan_text)
+            plan: Dict[str, Any] = json.loads(plan_text_clean)
         except Exception as e:
             logger.error(f"[A2A] Failed to parse plan JSON: {e}\nPlan text: {plan_text}")
             await event_queue.enqueue_event(

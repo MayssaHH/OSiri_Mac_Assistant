@@ -27,6 +27,10 @@ app = FastAPI(title="OSiri Assistant")
 # Track approval state per session (simple in-memory for demo)
 pending_approvals = {}
 
+# In-memory session memory: session_id -> list of {role, content}
+# Provides short-term conversational context within a session
+session_memory = {}
+
 
 async def send_to_orchestrator(message: str, approved: bool = False) -> dict:
     """Send a message to the OSiri orchestrator via A2A protocol."""
@@ -141,13 +145,17 @@ def format_response(response: dict) -> dict:
 
 @app.post("/api/chat")
 async def chat_endpoint(request: Request):
-    """Handle chat messages from the frontend."""
+    """Handle chat messages with in-memory session history."""
     data = await request.json()
     message = data.get("message", "").strip()
     session_id = data.get("session_id", "default")
     
     if not message:
         return JSONResponse({"error": "Empty message"}, status_code=400)
+    
+    # Initialize session memory if needed
+    if session_id not in session_memory:
+        session_memory[session_id] = []
     
     # Check for approval
     approved = False
@@ -164,9 +172,25 @@ async def chat_endpoint(request: Request):
                 "content": "Nothing to approve. What would you like me to do?",
                 "ok": True
             })
+    else:
+        # Record user message in session memory
+        session_memory[session_id].append({"role": "user", "content": actual_message})
     
-    # Send to orchestrator
-    response = await send_to_orchestrator(actual_message, approved=approved)
+    # Build conversation context from session history
+    context_parts = []
+    for turn in session_memory[session_id]:
+        role = turn["role"].capitalize()
+        context_parts.append(f"{role}: {turn['content']}")
+    
+    # Send full conversation context to orchestrator
+    full_context = "\n".join(context_parts)
+    response = await send_to_orchestrator(full_context, approved=approved)
+    
+    # Extract the response content for memory
+    formatted = format_response(response)
+    assistant_content = formatted.get("content", "")
+    if assistant_content and isinstance(assistant_content, str):
+        session_memory[session_id].append({"role": "assistant", "content": assistant_content})
     
     # Track approval state
     if response.get("reason") == "approval_required":
@@ -175,7 +199,19 @@ async def chat_endpoint(request: Request):
             "last_message": actual_message
         }
     
-    return JSONResponse(format_response(response))
+    return JSONResponse(formatted)
+
+
+@app.post("/api/clear")
+async def clear_session(request: Request):
+    """Clear session memory to start fresh."""
+    data = await request.json()
+    session_id = data.get("session_id", "default")
+    if session_id in session_memory:
+        session_memory[session_id] = []
+    if session_id in pending_approvals:
+        del pending_approvals[session_id]
+    return JSONResponse({"ok": True, "message": "Session cleared"})
 
 
 @app.get("/api/health")
