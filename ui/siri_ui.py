@@ -225,6 +225,7 @@ SIRI_HTML = '''
             max-height: 60vh;
             overflow-y: auto;
             padding: 0 10px;
+            transition: opacity 0.3s ease;
         }
         
         .response-area::-webkit-scrollbar {
@@ -521,6 +522,7 @@ SIRI_HTML = '''
             margin-bottom: 12px;
             flex-wrap: wrap;
             justify-content: center;
+            transition: opacity 0.3s ease;
         }
         
         .suggestion {
@@ -566,6 +568,7 @@ SIRI_HTML = '''
             backdrop-filter: blur(20px);
             border-radius: 16px;
             margin-bottom: 8px;
+            transition: opacity 0.3s ease;
         }
         
         .typing.visible {
@@ -634,9 +637,9 @@ SIRI_HTML = '''
     <div class="input-container">
         <div class="input-bar" id="inputBar">
             <div class="input-inner">
-                <div class="osiri-icon">
+                <div class="osiri-icon" onclick="toggleBar(event)" title="Click to collapse/expand">
                     <svg viewBox="0 0 24 24">
-                        <path d="M17.6 11.9c-.3-.9-.9-1.7-1.5-2.4-.4-.4-.8-.7-1.2-1-.3-.2-.6-.4-1-.5v-.1c.1-.1.1-.2.2-.3.4-.7.6-1.5.6-2.3 0-1.1-.4-2.1-1.1-2.9C13 1.5 12 1 10.9 1c-.9 0-1.7.3-2.4.8-.4.3-.7.6-1 1l-.1.1-.1-.1c-.3-.4-.7-.7-1.1-1C5.6 1.3 4.8 1 3.9 1 2.8 1 1.8 1.5 1.2 2.4.4 3.2 0 4.2 0 5.3c0 .8.2 1.6.6 2.3.1.1.1.2.2.3v.1c-.3.1-.7.3-1 .5-.4.3-.9.6-1.2 1-.6.7-1.2 1.5-1.5 2.4-.3.9-.5 1.8-.5 2.8v.7c0 .5.1 1 .3 1.5.2.5.4.9.8 1.3.3.4.7.7 1.2.9.5.2 1 .3 1.5.3h14c.5 0 1-.1 1.5-.3.5-.2.9-.5 1.2-.9.3-.4.6-.8.8-1.3.2-.5.3-1 .3-1.5v-.7c.1-1-.1-1.9-.4-2.8z"/>
+                        <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
                     </svg>
                 </div>
                 <input 
@@ -658,7 +661,36 @@ SIRI_HTML = '''
     <script>
         const sessionId = 'session_' + Math.random().toString(36).substr(2, 9);
         let isProcessing = false;
+        let isCollapsed = false;
         const FADE_DELAY = 8000; // Response fades after 8 seconds
+        
+        function toggleBar(e) {
+            e.stopPropagation();
+            const inputBar = document.getElementById('inputBar');
+            const suggestions = document.getElementById('suggestions');
+            const responses = document.getElementById('responses');
+            const typing = document.getElementById('typing');
+            
+            isCollapsed = !isCollapsed;
+            
+            if (isCollapsed) {
+                inputBar.classList.add('collapsed');
+                suggestions.style.opacity = '0';
+                suggestions.style.pointerEvents = 'none';
+                responses.style.opacity = '0';
+                responses.style.pointerEvents = 'none';
+                typing.style.opacity = '0';
+            } else {
+                inputBar.classList.remove('collapsed');
+                suggestions.style.opacity = '1';
+                suggestions.style.pointerEvents = 'auto';
+                responses.style.opacity = '1';
+                responses.style.pointerEvents = 'auto';
+                typing.style.opacity = '1';
+                // Focus input when expanded
+                setTimeout(() => document.getElementById('input').focus(), 300);
+            }
+        }
         
         function handleKey(e) {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -722,15 +754,17 @@ SIRI_HTML = '''
             if (data.type === 'approval' && typeof content === 'object') {
                 div.innerHTML = `
                     <div class="approval-content">
-                        <div class="approval-label">⚠️ Approval Required</div>
-                        <div class="approval-task"><strong>${content.agent}</strong>: ${content.task}</div>
-                    </div>
-                    <div class="approval-buttons">
-                        <button class="approve-btn" onclick="sendApproval(this)">
-                            <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
-                            Approve
-                        </button>
-                        <button class="reject-btn" onclick="rejectAction(this)">Cancel</button>
+                        <div class="approval-text">
+                            <div class="approval-label">⚠ ${content.agent}</div>
+                            <div class="approval-task">${content.task}</div>
+                        </div>
+                        <div class="approval-buttons">
+                            <button class="approve-btn" onclick="sendApproval(this)">
+                                <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                                Approve
+                            </button>
+                            <button class="reject-btn" onclick="rejectAction(this)">Skip</button>
+                        </div>
                     </div>
                 `;
                 shouldAutoFade = false; // Don't auto-fade approval messages

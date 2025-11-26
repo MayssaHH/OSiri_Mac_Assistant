@@ -478,90 +478,85 @@ HTML_TEMPLATE = '''
             font-size: 13px;
         }
         
-        /* Approval card */
+        /* Approval card - compact style */
         .approval-card {
-            background: rgba(251, 191, 36, 0.1);
-            border: 1px solid rgba(251, 191, 36, 0.3);
+            background: rgba(251, 191, 36, 0.08);
+            border: 1px solid rgba(251, 191, 36, 0.2);
             border-radius: var(--radius-md);
-            padding: 16px;
-            margin-top: 8px;
+            padding: 14px 16px;
         }
         
         .approval-card h4 {
-            color: var(--warning);
-            font-size: 14px;
-            margin-bottom: 12px;
+            color: rgba(251, 191, 36, 0.9);
+            font-size: 11px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
         }
         
         .approval-detail {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 8px;
-            font-size: 13px;
-        }
-        
-        .approval-detail .label {
-            color: var(--text-muted);
-            min-width: 60px;
+            margin-bottom: 10px;
+            font-size: 14px;
         }
         
         .approval-detail .value {
             color: var(--text-primary);
+            line-height: 1.4;
         }
         
-        /* Approval buttons */
+        /* Approval buttons - sleek inline style */
         .approval-buttons {
             display: flex;
             gap: 10px;
-            margin-top: 14px;
+            margin-top: 12px;
         }
         
         .approve-btn {
-            flex: 1;
-            background: linear-gradient(135deg, #34d399 0%, #059669 100%);
+            background: var(--accent-gradient);
             border: none;
-            border-radius: var(--radius-sm);
-            padding: 12px 20px;
+            border-radius: 20px;
+            padding: 8px 18px;
             color: white;
-            font-size: 14px;
-            font-weight: 600;
+            font-size: 13px;
+            font-weight: 500;
             cursor: pointer;
             transition: all 0.2s ease;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 8px;
+            gap: 6px;
         }
         
         .approve-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(52, 211, 153, 0.4);
+            transform: scale(1.05);
+            box-shadow: 0 4px 16px rgba(196, 69, 105, 0.4);
         }
         
         .approve-btn svg {
-            width: 18px;
-            height: 18px;
+            width: 14px;
+            height: 14px;
             fill: currentColor;
         }
         
         .reject-btn {
-            flex: 1;
-            background: rgba(248, 113, 113, 0.2);
-            border: 1px solid rgba(248, 113, 113, 0.4);
-            border-radius: var(--radius-sm);
-            padding: 12px 20px;
-            color: var(--error);
-            font-size: 14px;
-            font-weight: 500;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 20px;
+            padding: 8px 16px;
+            color: var(--text-secondary);
+            font-size: 13px;
+            font-weight: 400;
             cursor: pointer;
             transition: all 0.2s ease;
         }
         
         .reject-btn:hover {
-            background: rgba(248, 113, 113, 0.3);
+            background: rgba(255, 255, 255, 0.12);
+            color: var(--text-primary);
         }
         
         /* Input area */
@@ -1028,20 +1023,14 @@ HTML_TEMPLATE = '''
             } else if (data.type === 'approval') {
                 const c = data.content;
                 contentHtml = `
-                    <div>This action requires your approval:</div>
                     <div class="approval-card">
                         <h4>
-                            <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: var(--warning);">
+                            <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: var(--warning);">
                                 <path d="M12 2L1 21h22L12 2zm0 3.99L19.53 19H4.47L12 5.99zM13 16h-2v2h2v-2zm0-6h-2v4h2v-4z"/>
                             </svg>
-                            Approval Required
+                            ${c.agent}
                         </h4>
                         <div class="approval-detail">
-                            <span class="label">Agent:</span>
-                            <span class="value">${c.agent}</span>
-                        </div>
-                        <div class="approval-detail">
-                            <span class="label">Task:</span>
                             <span class="value">${c.task}</span>
                         </div>
                         <div class="approval-buttons">
@@ -1049,7 +1038,7 @@ HTML_TEMPLATE = '''
                                 <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
                                 Approve
                             </button>
-                            <button class="reject-btn" onclick="rejectAction()">Cancel</button>
+                            <button class="reject-btn" onclick="rejectAction()">Skip</button>
                         </div>
                     </div>
                 `;
