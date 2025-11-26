@@ -280,7 +280,7 @@ class BackupManager:
     def data_dir(self, task_id: str, checkpoint_id: str) -> Path:
         return self.task_checkpoint_dir(task_id, checkpoint_id) / "data"
 
-    # ----- Planning (no I/O guarantees yet) ---------------------------------
+    # ----- Planning (no/limited I/O) ----------------------------------------
 
     def plan_backup_layout(
         self,
@@ -332,6 +332,115 @@ class BackupManager:
         meta_path.parent.mkdir(parents=True, exist_ok=True)
         with meta_path.open("w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)
+
+    # ----- Backup & Restore (Phase 3) ---------------------------------------
+
+    def backup_deleted_items(
+        self,
+        task_id: str,
+        checkpoint_id: str,
+        deleted_items: List[Dict[str, Any]],
+        *,
+        command: str,
+        cwd_before: str,
+    ) -> str:
+        """
+        Create on-disk backups for deleted items and persist metadata.
+
+        Returns:
+            The checkpoint backup directory path (string).
+        """
+        layout = self.plan_backup_layout(
+            task_id=task_id,
+            checkpoint_id=checkpoint_id,
+            deleted_items=deleted_items,
+        )
+
+        # Copy content
+        for item_layout in layout["items"]:
+            src = Path(item_layout["original_path"])
+            dst = Path(item_layout["backup_path"])
+
+            if not src.exists():
+                # Nothing to back up (already gone)
+                continue
+
+            if item_layout["is_dir"]:
+                # Ensure parent exists and copy directory tree
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+
+        meta = {
+            "task_id": task_id,
+            "backup_id": checkpoint_id,
+            "command": command,
+            "cwd_before": cwd_before,
+            "deleted_items": deleted_items,
+            "layout": layout,
+        }
+        self.write_metadata(task_id, checkpoint_id, meta)
+        return layout["checkpoint_dir"]
+
+    def restore_from_checkpoint_dir(self, checkpoint_dir: str) -> Dict[str, Any]:
+        """
+        Restore files/directories from a backup checkpoint directory.
+
+        Args:
+            checkpoint_dir: Path returned by backup_deleted_items / plan_backup_layout
+
+        Returns:
+            Dict with {ok, restored_count, errors}
+        """
+        cp_path = Path(checkpoint_dir)
+        meta_path = cp_path / "metadata.json"
+
+        if not meta_path.exists():
+            return {
+                "ok": False,
+                "restored_count": 0,
+                "errors": [f"metadata.json not found in {checkpoint_dir}"],
+            }
+
+        with meta_path.open("r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        layout = meta.get("layout") or {}
+        items = layout.get("items") or []
+
+        restored = 0
+        errors: List[str] = []
+
+        for item in items:
+            src = Path(item.get("backup_path", ""))
+            dst = Path(item.get("original_path", ""))
+            is_dir = bool(item.get("is_dir"))
+
+            if not src.exists():
+                errors.append(f"backup missing for {dst}")
+                continue
+
+            try:
+                if is_dir:
+                    # Remove existing destination (if any) then restore
+                    if dst.exists():
+                        shutil.rmtree(dst)
+                    shutil.copytree(src, dst)
+                else:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+                restored += 1
+            except Exception as e:
+                errors.append(f"failed to restore {dst}: {e}")
+
+        return {
+            "ok": len(errors) == 0,
+            "restored_count": restored,
+            "errors": errors,
+        }
 
 
 # ============================================================================
@@ -497,30 +606,33 @@ class CheckpointManager:
 
     def pop_undo(self, task_id: str) -> Optional[TerminalCheckpoint]:
         """
-        Pop and return the last reversible checkpoint for this task.
+        Pop and return the last undoable checkpoint for this task.
         
-        Non-reversible checkpoints are skipped (removed from stack).
+        A checkpoint is considered undoable if:
+        - It has an undo_command (non-destructive reversible operation), OR
+        - It is marked as a deletion (is_deletion=True) with backup metadata.
+        
+        Other checkpoints are skipped (removed from stack).
         
         Args:
             task_id: The task to undo from
             
         Returns:
-            The checkpoint with undo_command, or None if nothing to undo
+            The checkpoint to undo/restore, or None if nothing to undo
         """
         stack = self._terminal_stacks.get(task_id, [])
         
         while stack:
             cp = stack.pop()
-            if cp.undo_command:
+            if cp.undo_command or (cp.is_deletion and cp.backup_path):
                 logger.info(
                     f"[{task_id}] Popped undo checkpoint: {cp.command[:50]}... "
-                    f"-> {cp.undo_command}"
+                    f"(undo_command={cp.undo_command}, is_deletion={cp.is_deletion})"
                 )
                 return cp
-            else:
-                logger.debug(
-                    f"[{task_id}] Skipped non-reversible: {cp.command[:50]}..."
-                )
+            logger.debug(
+                f"[{task_id}] Skipped non-undoable: {cp.command[:50]}..."
+            )
         
         logger.info(f"[{task_id}] Nothing to undo")
         return None

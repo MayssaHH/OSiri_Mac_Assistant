@@ -4,6 +4,7 @@ import subprocess
 import time
 import uuid
 import re
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
@@ -291,28 +292,17 @@ def run_command(
             if deleted_items:
                 # Use a dedicated backup id separate from checkpoint id
                 backup_id = uuid.uuid4().hex[:8]
-                layout = _backup_manager.plan_backup_layout(
+                # Phase 3: actually create backups on disk
+                backup_path = _backup_manager.backup_deleted_items(
                     task_id=task_id,
                     checkpoint_id=backup_id,
                     deleted_items=deleted_items,
+                    command=command,
+                    cwd_before=cwd_before,
                 )
-                backup_path = layout.get("checkpoint_dir")
-
-                # NOTE: We only plan + persist metadata in Phase 2.
-                # Actual content copy/restore will be handled in Phase 3.
-                meta = {
-                    "task_id": task_id,
-                    "backup_id": backup_id,
-                    "command": command,
-                    "cwd_before": cwd_before,
-                    "deleted_items": deleted_items,
-                    "layout": layout,
-                }
-                _backup_manager.write_metadata(task_id, backup_id, meta)
-                # Attach lightweight hint to the result later
         except Exception as e:
-            # Backup planning failure must never block the actual command
-            logger.warning(f"[checkpoint] Failed to plan backup for '{command}': {e}")
+            # Backup failure must never block the actual command
+            logger.warning(f"[checkpoint] Failed to back up for '{command}': {e}")
 
     # Execute the command
     result = manager.run_command(session_id, command, timeout_s=timeout_s, approved=approved)
@@ -368,47 +358,61 @@ def get_cwd(session_id: str) -> dict:
 @mcp.tool()
 def undo_last(task_id: str, session_id: str) -> dict:
     """
-    Undo the last reversible command for a task.
-    
-    Pops the most recent reversible checkpoint and executes its undo command.
-    Non-reversible commands (rm, mv, cp, etc.) are skipped.
-    
+    Undo the last undoable command for a task.
+
+    Supports two kinds of undo:
+    - Non-destructive commands with an undo_command (mkdir, touch, cd, etc.)
+    - Deletion commands backed up via BackupManager (rm/rmdir with backups)
+
     Args:
         task_id: The task whose last command should be undone
-        session_id: The shell session to run the undo command in
-        
+        session_id: The shell session to run the undo command in (for undo_command)
+
     Returns:
-        {ok, undone_command, undo_command, result} on success
+        For command-based undo:
+            {ok, undone_command, undo_command, result}
+        For restore-based undo:
+            {ok, undone_command, restore_result}
         {ok, error} if nothing to undo
     """
-    # Pop the last reversible checkpoint
+    # Pop the last undoable checkpoint (may be command-based or deletion-based)
     cp = checkpoint_manager.pop_undo(task_id)
-    
+
     if not cp:
         return {
-            "ok": False, 
-            "error": "Nothing to undo - no reversible commands in history"
-        }
-    
-    if not cp.undo_command:
-        return {
             "ok": False,
-            "error": f"Command '{cp.command}' is not reversible"
+            "error": "Nothing to undo - no undoable commands in history",
         }
-    
-    # Execute the undo command (with approved=True since this is a controlled undo)
-    undo_result = manager.run_command(
-        session_id, 
-        cp.undo_command, 
-        timeout_s=20.0, 
-        approved=True
-    )
-    
+
+    # Case 1: command-based undo (existing behavior)
+    if cp.undo_command:
+        undo_result = manager.run_command(
+            session_id,
+            cp.undo_command,
+            timeout_s=20.0,
+            approved=True,
+        )
+
+        return {
+            "ok": undo_result.get("ok", False),
+            "undone_command": cp.command,
+            "undo_command": cp.undo_command,
+            "result": undo_result,
+        }
+
+    # Case 2: deletion-based undo via backups
+    if cp.is_deletion and cp.backup_path:
+        restore_result = _backup_manager.restore_from_checkpoint_dir(cp.backup_path)
+        return {
+            "ok": restore_result.get("ok", False),
+            "undone_command": cp.command,
+            "restore_result": restore_result,
+        }
+
+    # Fallback: nothing we can actually undo
     return {
-        "ok": undo_result.get("ok", False),
-        "undone_command": cp.command,
-        "undo_command": cp.undo_command,
-        "result": undo_result,
+        "ok": False,
+        "error": f"Command '{cp.command}' is not undoable (no undo_command or backup)",
     }
 
 
