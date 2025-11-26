@@ -40,6 +40,10 @@ def get_planner_prompt():
       commands that simulate undo (like rm, mv from ~/.Trash, etc.).
       The actual undo/recovery should be handled via dedicated tools
       (undo_last, get_undo_history) at execution time.
+    - For undo_last commands, the verification step should check the
+      result of the undo operation itself rather than trying to verify
+      specific filenames (which are unknown until execution). Use
+      "echo undo_last completed" or similar as the verify command.
     - Return JSON only.
     """
 

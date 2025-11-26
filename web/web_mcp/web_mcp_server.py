@@ -6,15 +6,24 @@ Tools: search_web, scrape_url, get_browser_history
 import os
 import sqlite3
 import shutil
+import httpx
 from datetime import datetime, timedelta
 from mcp.server.fastmcp import FastMCP
 from tavily import TavilyClient
 import trafilatura
+from trafilatura.settings import use_config
 import json
 from openai import OpenAI
 
 
 mcp = FastMCP(name="Web MCP Server")
+
+# Configure trafilatura with higher file size limit
+trafilatura_config = use_config()
+trafilatura_config.set("DEFAULT", "MAX_FILE_SIZE", "20000000")  # 20MB
+
+# User-Agent for bypassing bot detection
+USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 FILTER_MODEL = "gpt-4o-mini"
@@ -63,13 +72,55 @@ def search_web(query: str) -> dict:
 
 
 # ============================================================================
-# Tool 2: URL Scraping (Trafilatura)
+# Tool 2: URL Scraping (Trafilatura + httpx for better headers)
 # ============================================================================
+
+def _fetch_with_headers(url: str, timeout: float = 30.0) -> str | None:
+    """
+    Fetch URL content with proper browser headers to bypass bot detection.
+    Falls back to trafilatura if httpx fails.
+    """
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    
+    try:
+        with httpx.Client(follow_redirects=True, timeout=timeout) as client:
+            response = client.get(url, headers=headers)
+            response.raise_for_status()
+            return response.text
+    except Exception as e:
+        # Log and fall back to trafilatura
+        print(f"httpx fetch failed: {e}, falling back to trafilatura")
+        return trafilatura.fetch_url(url, config=trafilatura_config)
+
+
+def _handle_arxiv_url(url: str) -> dict:
+    """
+    Special handling for arXiv URLs.
+    Redirects PDF URLs to the abstract page which has readable HTML.
+    """
+    # Convert PDF URL to abstract URL
+    # arxiv.org/pdf/2209.00796 -> arxiv.org/abs/2209.00796
+    if "/pdf/" in url:
+        abs_url = url.replace("/pdf/", "/abs/").rstrip(".pdf")
+        return {"redirect": abs_url, "message": f"Redirecting arXiv PDF to abstract page: {abs_url}"}
+    return None
+
 
 @mcp.tool()
 def scrape_url(url: str) -> dict:
     """
     Extracts clean text content from a specific URL.
+    
+    Handles special cases:
+    - arXiv PDFs: Redirects to abstract page for readable content
+    - Protected sites: Uses browser-like headers to bypass bot detection
     
     Args:
         url: The URL to scrape
@@ -78,13 +129,33 @@ def scrape_url(url: str) -> dict:
         dict with 'ok', 'text', 'url', or 'error'
     """
     try:
-        downloaded = trafilatura.fetch_url(url)
+        # Handle arXiv PDFs specially
+        if "arxiv.org" in url:
+            arxiv_result = _handle_arxiv_url(url)
+            if arxiv_result and "redirect" in arxiv_result:
+                url = arxiv_result["redirect"]
+        
+        # Check if it's a PDF URL (we can't extract text from PDFs with trafilatura)
+        if url.lower().endswith(".pdf"):
+            return {
+                "ok": False, 
+                "error": "PDF files cannot be scraped directly. Please provide the HTML page URL instead.",
+                "suggestion": "For arXiv, use the abstract page (arxiv.org/abs/...) instead of the PDF."
+            }
+        
+        # Fetch with proper headers
+        downloaded = _fetch_with_headers(url)
         if not downloaded:
             return {"ok": False, "error": "Could not fetch URL (404, blocked, or invalid)"}
         
-        text = trafilatura.extract(downloaded)
+        # Extract text using trafilatura
+        text = trafilatura.extract(downloaded, config=trafilatura_config)
         if not text:
             return {"ok": False, "error": "No text content found on page"}
+        
+        # Truncate very long content (keep first 10000 chars)
+        if len(text) > 10000:
+            text = text[:10000] + "\n\n[Content truncated...]"
         
         return {"ok": True, "url": url, "text": text}
     
