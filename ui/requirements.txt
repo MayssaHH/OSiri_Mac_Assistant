@@ -1,0 +1,8 @@
+# OSiri UI Dependencies
+gradio>=4.0.0
+httpx
+python-dotenv
+pywebview>=4.0.0
+uvicorn
+a2a-sdk
+

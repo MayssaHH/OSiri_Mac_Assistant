@@ -69,6 +69,16 @@ class TerminalAgentExecutor(AgentExecutor):
         plan_res = await self.planner.run(task_text)
         plan_text = plan_res.text.strip()
 
+        # Strip markdown code blocks if present (LLM sometimes wraps JSON in ```json ... ```)
+        if plan_text.startswith("```"):
+            lines = plan_text.split("\n")
+            # Remove first line (```json or ```)
+            lines = lines[1:]
+            # Remove last line (```)
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            plan_text = "\n".join(lines).strip()
+
         try:
             plan: Dict[str, Any] = json.loads(plan_text)
         except Exception as e:

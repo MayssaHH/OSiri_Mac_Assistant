@@ -19,6 +19,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from common.checkpoint import CheckpointManager
+from agent_framework import ai_function
 
 logger = logging.getLogger("web-mcp-client")
 
@@ -152,6 +153,10 @@ async def _call_tool_with_retry(
 # All functions use automatic retry with checkpoint tracking
 # ============================================================================
 
+@ai_function(
+    name="search_web",
+    description="Search the web using Tavily. Returns search results for a given query."
+)
 async def search_web(query: str, max_retries: int = 3) -> dict:
     """
     Search the web using Tavily.
@@ -172,6 +177,10 @@ async def search_web(query: str, max_retries: int = 3) -> dict:
     )
 
 
+@ai_function(
+    name="scrape_url",
+    description="Scrape and extract text content from a URL."
+)
 async def scrape_url(url: str, max_retries: int = 3) -> dict:
     """
     Scrape text content from a URL.
@@ -192,6 +201,10 @@ async def scrape_url(url: str, max_retries: int = 3) -> dict:
     )
 
 
+@ai_function(
+    name="get_browser_history",
+    description="Get browser history entries. Can filter by time range, count, and domain."
+)
 async def get_browser_history(
     hours: int = 24, 
     count: int = 10, 
@@ -223,6 +236,10 @@ async def get_browser_history(
     )
 
 
+@ai_function(
+    name="filter_browser_history",
+    description="LLM-based filter to find relevant browser history entries based on user intent."
+)
 async def filter_browser_history(
     history: list, 
     intent: str, 

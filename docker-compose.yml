@@ -1,0 +1,119 @@
+# OSiri Mac Assistant - Docker Compose
+# 
+# QUICK START:
+#   1. Copy .env.example to .env and fill in your API keys
+#   2. Run: docker-compose up --build
+#   3. Open: http://localhost:7860
+#
+# INDIVIDUAL SERVICES:
+#   docker-compose up ui              # Just the UI
+#   docker-compose up orchestrator    # Just the orchestrator
+#   docker-compose up --build         # Rebuild and start all
+
+services:
+  # ============================================
+  # OSiri Web UI - Gradio Interface
+  # ============================================
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    ports:
+      - "7860:7860"
+    environment:
+      - A2A_BASE_URL=http://orchestrator:9997/
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks:
+      - osiri-network
+    restart: unless-stopped
+
+  # ============================================
+  # Orchestrator - Routes tasks to agents
+  # ============================================
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    ports:
+      - "9997:9997"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - A2A_HOST=0.0.0.0
+      - A2A_PORT=9997
+      - A2A_BASE_URL=http://orchestrator:9997/
+      - TERMINAL_AGENT_URL=http://terminal:9998/
+      - WEB_AGENT_URL=http://web:9999/
+    depends_on:
+      terminal:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    networks:
+      - osiri-network
+    restart: unless-stopped
+
+  # ============================================
+  # Terminal Agent - File/system operations
+  # ============================================
+  terminal:
+    build:
+      context: .
+      dockerfile: terminal/Dockerfile
+    ports:
+      - "9998:9998"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - A2A_HOST=0.0.0.0
+      - TERMINAL_AGENT_PORT=9998
+      - TERMINAL_AGENT_URL=http://terminal:9998/
+      - HOME=/host-home
+    volumes:
+      # Mount host home directory for full filesystem access
+      - ~/:/host-home
+      # Mount specific common directories at expected paths
+      - ~/Desktop:/root/Desktop
+      - ~/Downloads:/root/Downloads
+      - ~/Documents:/root/Documents
+      # Sandboxed workspace (fallback)
+      - terminal-workspace:/workspace
+    working_dir: /host-home
+    networks:
+      - osiri-network
+    restart: unless-stopped
+
+  # ============================================
+  # Web Agent - Web search and browsing
+  # ============================================
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    ports:
+      - "9999:9999"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+      - A2A_HOST=0.0.0.0
+      - WEB_AGENT_PORT=9999
+      - WEB_AGENT_URL=http://web:9999/
+    volumes:
+      # Mount browser history databases (read-only for safety)
+      # The code uses ~/Library/... which resolves to /root/Library/... in container
+      # Safari history
+      - ~/Library/Safari:/root/Library/Safari:ro
+      # Chrome history (macOS path)
+      - ~/Library/Application Support/Google/Chrome:/root/Library/Application Support/Google/Chrome:ro
+    networks:
+      - osiri-network
+    restart: unless-stopped
+
+networks:
+  osiri-network:
+    driver: bridge
+
+volumes:
+  terminal-workspace:
+    driver: local
