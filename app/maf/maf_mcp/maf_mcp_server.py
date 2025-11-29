@@ -42,8 +42,8 @@ def get_gmail_service():
     ]
     creds = None
     
-    # Look for token.json in typical locations
-    token_locations = ["maf_agent/token.json", "token.json"]
+    # Look for token.json in typical locations (Docker mounts to /app/token.json)
+    token_locations = ["/app/token.json", "token.json", "maf_agent/token.json"]
     token_path = None
     
     for path in token_locations:
@@ -78,18 +78,49 @@ def get_gmail_service():
 # Tool 1: Slack Integration (Real)
 # ============================================================================
 
+def convert_to_slack_mrkdwn(text: str) -> str:
+    """
+    Convert standard markdown to Slack's mrkdwn format.
+    
+    Slack mrkdwn differences:
+    - Bold: *text* (not **text**)
+    - Italic: _text_ (same)
+    - Strikethrough: ~text~ (same)
+    - Code: `text` (same)
+    - Links: <url|text> (not [text](url))
+    """
+    import re
+    
+    # Convert **bold** to *bold*
+    text = re.sub(r'\*\*(.+?)\*\*', r'*\1*', text)
+    
+    # Convert [text](url) to <url|text>
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<\2|\1>', text)
+    
+    # Convert ### headers to *bold* (Slack doesn't have headers)
+    text = re.sub(r'^###\s*(.+)$', r'*\1*', text, flags=re.MULTILINE)
+    text = re.sub(r'^##\s*(.+)$', r'*\1*', text, flags=re.MULTILINE)
+    text = re.sub(r'^#\s*(.+)$', r'*\1*', text, flags=re.MULTILINE)
+    
+    return text
+
+
 @mcp.tool()
 def send_slack_message(channel: str, text: str) -> dict:
     """
     Sends a message to a Slack channel.
+    Automatically converts standard markdown to Slack's mrkdwn format.
     """
     client = get_slack_client()
     if not client:
         return {"ok": False, "error": "SLACK_BOT_TOKEN not set"}
 
     try:
+        # Convert markdown to Slack mrkdwn
+        slack_text = convert_to_slack_mrkdwn(text)
+        
         # Try sending directly first (assuming channel is ID or name)
-        response = client.chat_postMessage(channel=channel, text=text)
+        response = client.chat_postMessage(channel=channel, text=slack_text)
         return {
             "ok": True,
             "ts": response["ts"],
@@ -103,7 +134,7 @@ def send_slack_message(channel: str, text: str) -> dict:
 def read_slack_messages(channel: str, limit: int = 10) -> dict:
     """
     Reads recent messages from a Slack channel.
-    Note: If 'channel' is a name (e.g. #general), we attempt to resolve it to an ID.
+    Accepts channel name (with or without #) or channel ID.
     """
     client = get_slack_client()
     if not client:
@@ -111,9 +142,12 @@ def read_slack_messages(channel: str, limit: int = 10) -> dict:
 
     channel_id = channel
     
-    # If channel starts with #, try to resolve ID
-    if channel.startswith("#"):
-        target_name = channel.lstrip("#")
+    # Check if it looks like a channel ID (starts with C, D, or G and is alphanumeric)
+    is_channel_id = channel.startswith(('C', 'D', 'G')) and len(channel) >= 9 and channel[1:].isalnum()
+    
+    # If it's not a channel ID, try to resolve the name
+    if not is_channel_id:
+        target_name = channel.lstrip("#")  # Remove # if present
         try:
             cursor = None
             found = False
@@ -132,9 +166,11 @@ def read_slack_messages(channel: str, limit: int = 10) -> dict:
                 if found or not response.get("response_metadata", {}).get("next_cursor"):
                     break
                 cursor = response["response_metadata"]["next_cursor"]
-        except SlackApiError:
-            # If list fails (e.g. missing scope), fall back to trying raw channel name
-            pass
+            
+            if not found:
+                return {"ok": False, "error": f"Channel '{target_name}' not found. Make sure the bot is invited to the channel."}
+        except SlackApiError as e:
+            return {"ok": False, "error": f"Error listing channels: {e.response['error']}"}
 
     try:
         response = client.conversations_history(channel=channel_id, limit=limit)
@@ -197,10 +233,46 @@ def send_outlook_email(to_email: str, subject: str, body: str) -> dict:
         return {"ok": False, "error": f"Gmail API Error: {error}"}
 
 
+def _get_email_body(payload: dict) -> str:
+    """Extract the plain text body from an email payload."""
+    body = ""
+    
+    # Check if the body is directly in the payload
+    if "body" in payload and payload["body"].get("data"):
+        body = base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8", errors="ignore")
+    
+    # Check for multipart messages
+    elif "parts" in payload:
+        for part in payload["parts"]:
+            mime_type = part.get("mimeType", "")
+            
+            # Prefer plain text
+            if mime_type == "text/plain" and part.get("body", {}).get("data"):
+                body = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="ignore")
+                break
+            
+            # Fall back to HTML if no plain text
+            elif mime_type == "text/html" and part.get("body", {}).get("data") and not body:
+                html_body = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="ignore")
+                # Simple HTML tag stripping
+                import re
+                body = re.sub(r'<[^>]+>', '', html_body)
+            
+            # Recursively check nested parts
+            elif "parts" in part:
+                nested_body = _get_email_body(part)
+                if nested_body:
+                    body = nested_body
+                    break
+    
+    return body.strip()
+
+
 @mcp.tool()
-def read_outlook_emails(limit: int = 5) -> dict:
+def read_outlook_emails(limit: int = 5, full_content: bool = False) -> dict:
     """
     Reads recent emails from Gmail (keeping function name 'outlook' for compat).
+    Set full_content=True to get the complete email body instead of just the snippet.
     """
     service = get_gmail_service()
     if not service:
@@ -215,18 +287,24 @@ def read_outlook_emails(limit: int = 5) -> dict:
             return {"ok": True, "emails": []}
 
         for msg in messages:
-            txt = service.users().messages().get(userId="me", id=msg["id"]).execute()
+            txt = service.users().messages().get(userId="me", id=msg["id"], format="full").execute()
             payload = txt.get("payload", {})
             headers = payload.get("headers", [])
             
             subject = next((h["value"] for h in headers if h["name"] == "Subject"), "(No Subject)")
             sender = next((h["value"] for h in headers if h["name"] == "From"), "(Unknown)")
-            snippet = txt.get("snippet", "")
+            date = next((h["value"] for h in headers if h["name"] == "Date"), "")
+            
+            if full_content:
+                body = _get_email_body(payload)
+            else:
+                body = txt.get("snippet", "")
             
             formatted.append({
                 "subject": subject,
                 "from": sender,
-                "snippet": snippet,
+                "date": date,
+                "body": body,
                 "id": msg["id"]
             })
             

@@ -111,17 +111,18 @@ async def send_outlook_email(to_email: str, subject: str, body: str) -> dict:
 
 @ai_function(
     name="read_outlook_emails",
-    description="Read recent Outlook emails."
+    description="Read recent Outlook emails. Set full_content=True to get complete email body instead of just snippet."
 )
-async def read_outlook_emails(limit: int = 5) -> dict:
+async def read_outlook_emails(limit: int = 5, full_content: bool = False) -> dict:
     """
     Read recent Outlook emails.
     
     Args:
         limit: Number of emails to read
+        full_content: If True, returns the complete email body. If False, returns only a snippet.
     """
     async with get_maf_mcp() as session:
-        result = await session.call_tool("read_outlook_emails", arguments={"limit": limit})
+        result = await session.call_tool("read_outlook_emails", arguments={"limit": limit, "full_content": full_content})
         if result.content:
             text_resp = result.content[0].text
             return json.loads(text_resp) if isinstance(text_resp, str) else text_resp

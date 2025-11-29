@@ -29,7 +29,7 @@ Available tools:
 - send_slack_message(channel: str, text: str)
 - read_slack_messages(channel: str, limit: int)
 - send_outlook_email(to_email: str, subject: str, body: str)
-- read_outlook_emails(limit: int)
+- read_outlook_emails(limit: int, full_content: bool)
 
 Output a JSON plan with this structure:
 {
@@ -38,23 +38,26 @@ Output a JSON plan with this structure:
     {
       "step": 1,
       "action": "tool_name",
-      "params": {"param1": "value1", ...},
+      "params": {"param1": "value1", "full_content": true},
       "reason": "why this step is needed"
     }
   ],
   "expected_outcome": "what the user should get"
 }
 
+CRITICAL JSON RULES:
+- Use lowercase JSON booleans: true and false (NOT Python True/False)
+- All strings must be in double quotes
+- No trailing commas
+
 Guidelines:
 - Break complex tasks into simple steps.
-- Example: "Check my emails and tell me if there's anything urgent" -> 
-  1. read_outlook_emails
-  2. (The executor will summarize the results, so only one step needed here unless specific action required).
-- Example: "Email the last Slack message from #general to boss@company.com" ->
-  1. read_slack_messages(channel="#general", limit=1)
-  2. send_outlook_email(to_email="boss@company.com", subject="Forwarded Slack", body="<content from step 1>")
+- When user asks for "full content", "complete email", "entire message", etc., use "full_content": true
+- For summaries or quick checks, use "full_content": false
+- Example: "Check my emails" -> {"limit": 5, "full_content": false}
+- Example: "Give me the full content of the last email" -> {"limit": 1, "full_content": true}
   
-IMPORTANT: Return ONLY raw JSON without markdown code blocks (```json) or additional text.
+IMPORTANT: Return ONLY raw JSON without markdown code blocks. Use JSON booleans (true/false), not Python (True/False).
 """
 
 def get_execution_prompt() -> str:
@@ -66,14 +69,20 @@ You receive a JSON plan and execute it step-by-step using the available tools.
 Available tools:
 - send_slack_message
 - read_slack_messages
-- send_outlook_email
-- read_outlook_emails
+- send_outlook_email(to_email, subject, body)
+- read_outlook_emails(limit, full_content=True/False) - set full_content=True to get complete email body
 
 Your responsibilities:
 1. Execute each step in the plan sequentially.
 2. Pass data between steps when needed (e.g., content from a read step used in a send step).
    - If a previous step returned content you need to forward, you must dynamically insert it into the arguments for the next step.
-3. Provide a final summary of what was accomplished.
+3. Provide a final result.
+
+CRITICAL RULES:
+- When the user asks for "full content", "complete email", or similar, you MUST include the ENTIRE email body in your response WITHOUT summarizing or truncating it.
+- When reading emails with full_content=True, include the complete body text in the final_result.
+- Do NOT summarize email content unless explicitly asked to summarize.
+- Preserve all original text, formatting, and details from emails and messages.
 
 Output format (JSON):
 {
@@ -81,15 +90,19 @@ Output format (JSON):
     {
       "step": 1,
       "action": "tool_name",
-      "status": "success" | "failed",
-      "result": "...",
-      "error": "..." (if failed)
+      "status": "success",
+      "result": "..."
     }
   ],
-  "final_result": "user-friendly summary",
-  "success": true | false
+  "final_result": "The complete content/data requested by the user - DO NOT summarize unless asked",
+  "success": true
 }
 
-IMPORTANT: Return ONLY raw JSON without markdown code blocks (```json) or additional text.
+CRITICAL JSON RULES:
+- Use lowercase JSON booleans: true and false (NOT Python True/False)
+- All strings must be in double quotes
+- No trailing commas
+
+IMPORTANT: Return ONLY raw JSON without markdown code blocks. Use JSON booleans (true/false), not Python (True/False).
 """
 
