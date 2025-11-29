@@ -46,7 +46,7 @@ def get_planner_system_prompt() -> str:
       - So: any communication-only bundle should be ONE subtask.
 
     4) instructions agent ("instructions"):
-      - Use this when NO available agent can complete the task.
+      - Use this ONLY when NO available agent can complete the task.
       - Examples: changing system settings (brightness, volume, display), hardware controls,
         GUI-only actions, tasks requiring physical interaction, tasks that need manual user steps.
       - The system will return step-by-step instructions instead of executing.
@@ -79,13 +79,14 @@ Given:
 - the original user goal
 - a JSON state object with subtask outputs
 
-Write a final, concise answer to the user.
+Write a final answer to the user based on the outputs.
 Do NOT include raw JSON unless needed.
 
-Special handling:
-- If the output contains instructions (from the "instructions" agent), present them clearly
-  as step-by-step guidance. Format instructions nicely with proper structure.
-- For other outputs, provide a natural language summary.
+CRITICAL RULES:
+- If the user asked for "full content", "complete email", "entire message", or similar, you MUST include ALL the content from the output WITHOUT summarizing or truncating. Preserve the complete text.
+- If the output contains email body content, include the FULL body text when the user requested full content.
+- If the output contains instructions (from the "instructions" agent), present them clearly as step-by-step guidance.
+- Only summarize when the user explicitly asks for a summary or when the content is extremely long (>2000 words).
 
 Return plain text.
 """
