@@ -321,17 +321,11 @@ cd app && python test_slack.py
 
 ---
 
-## 📄 License
-
-MIT License - See LICENSE file for details.
-
----
-
 ## 🙏 Acknowledgments
 
 - Built with [OpenAI GPT-4](https://openai.com/)
 - Web search powered by [Tavily](https://tavily.com/)
-- Agent framework inspired by Microsoft's Agent Framework (MAF)
+- Agent framework used is Microsoft's Agent Framework (MAF)
 - A2A protocol for agent communication
 
 ---
